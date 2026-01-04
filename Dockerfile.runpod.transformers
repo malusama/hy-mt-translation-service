@@ -1,0 +1,33 @@
+# RunPod / Linux GPU image: this project only (Transformers backend on CUDA)
+# Use an official PyTorch CUDA runtime (no vLLM needed for HY-MT).
+
+FROM pytorch/pytorch:2.2.2-cuda11.8-cudnn8-runtime
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HF_HOME=/runpod-volume/hf
+
+WORKDIR /app
+
+COPY pyproject.toml README.md /app/
+COPY src /app/src
+
+RUN python -m pip install --no-cache-dir -U pip \
+  && python -m pip install --no-cache-dir ".[transformers]"
+
+EXPOSE 3000
+
+ENV HOST=0.0.0.0 \
+    PORT=3000 \
+    BACKEND=transformers \
+    DEVICE=cuda \
+    DTYPE=float16 \
+    MODEL_ID=tencent/HY-MT1.5-1.8B \
+    PRELOAD_MODEL=1 \
+    MODEL_MAX_CONCURRENCY=1 \
+    UVICORN_WORKERS=1
+
+ENTRYPOINT []
+CMD ["hy-mt-server"]

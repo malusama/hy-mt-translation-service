@@ -1,0 +1,44 @@
+[project]
+name = "hy-mt-mlx-translation-service"
+version = "0.1.0"
+description = "MLX-based translation service using HY-MT1.5-1.8B, compatible with LinguaSpark/server APIs (incl. Immersive Translate)."
+readme = "README.md"
+requires-python = ">=3.10,<3.13"
+license = { text = "MIT" }
+authors = [{ name = "local" }]
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "pydantic>=2.7",
+  "langid>=1.1.6",
+]
+
+[project.optional-dependencies]
+mlx = [
+  "mlx>=0.29",
+  "mlx-lm>=0.28.3",
+]
+transformers = [
+  "torch>=2.2",
+  # Model card recommends transformers 4.56.x for HY-MT1.5
+  "transformers>=4.56,<4.58",
+  "accelerate>=0.33",
+  "safetensors>=0.4",
+  "sentencepiece>=0.2",
+]
+
+[project.scripts]
+hy-mt-server = "hy_mt_mlx_server.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.uv]
+package = true
