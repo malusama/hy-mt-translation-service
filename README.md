@@ -7,6 +7,7 @@
 - **macOS + Apple Silicon**：`mlx/mlx-lm`（最低延迟/本机自用）
 - **Linux / 无 GPU**：Docker + `transformers`（CPU，较慢）
 - **Linux + NVIDIA GPU（RunPod 等）**：`transformers + CUDA`（推荐，见 `RUNPOD.md`）
+- **RunPod Serverless（Worker 网关）**：scale-to-zero 更省钱；用 `cloudflare-worker/` 把 Job API 变成 HTTP（见 `RUNPOD.md` / `cloudflare-worker/README.md`）
 
 ## 运行环境
 

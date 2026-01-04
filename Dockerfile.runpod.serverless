@@ -1,0 +1,17 @@
+FROM runpod/base:0.6.1-cuda11.8.0
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    HF_HUB_DISABLE_TELEMETRY=1 \
+    HF_HOME=/runpod-volume/hf
+
+COPY builder/requirements.txt /requirements.txt
+RUN python3.11 -m pip install --upgrade pip && \
+    python3.11 -m pip install --no-cache-dir -r /requirements.txt && \
+    rm /requirements.txt
+
+ADD . /
+
+CMD python3.11 -u /src/handler.py
+

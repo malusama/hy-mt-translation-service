@@ -14,3 +14,5 @@ build/
 *.egg-info/
 model/
 .cache/
+cloudflare-worker/node_modules/
+cloudflare-worker/.wrangler/

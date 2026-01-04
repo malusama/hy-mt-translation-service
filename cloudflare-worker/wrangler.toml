@@ -1,0 +1,12 @@
+name = "hy-mt-runpod-gateway"
+main = "src/index.ts"
+compatibility_date = "2026-01-04"
+
+[vars]
+RUNPOD_ENDPOINT_ID = "<your-runpod-endpoint-id>"
+RUNPOD_API_BASE = "https://api.runpod.ai/v2"
+
+# Optional: protect your gateway with a shared secret.
+# If set, clients must send `Authorization: Bearer <CLIENT_API_KEY>`.
+# CLIENT_API_KEY = ""
+

@@ -1,0 +1,12 @@
+runpod>=1.7
+
+# Core
+langid>=1.1.6
+
+# Transformers backend (RunPod GPU)
+torch>=2.2
+transformers>=4.56,<4.58
+accelerate>=0.33
+safetensors>=0.4
+sentencepiece>=0.2
+

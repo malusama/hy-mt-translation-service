@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import os
 import time
-import re
 from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -21,6 +20,7 @@ from .schemas import (
 )
 
 from .lang import detect_language_code, normalize_lang
+from .imme import translate_imme, translate_text
 from .model import GenerationParams, TranslationModel
 from .settings import Settings
 
@@ -128,100 +128,15 @@ def make_app(model: TranslationModel, settings: Settings) -> FastAPI:
     async def detect(req: DetectRequest) -> DetectResponse:
         return DetectResponse(language=detect_language_code(req.text))
 
-    def _split_long_text(text: str, max_chars: int) -> list[str]:
-        """
-        Best-effort chunking for very long inputs.
-
-        Goals:
-        - Keep formatting boundaries (newlines) as much as possible.
-        - Keep each chunk <= max_chars (approx), so generation isn't silently truncated by MAX_NEW_TOKENS.
-        """
-        if max_chars <= 0:
-            return [text]
-        if len(text) <= max_chars:
-            return [text]
-
-        # Split paragraphs but keep separators.
-        parts = re.split(r"(\n{2,})", text)
-        chunks: list[str] = []
-
-        def flush(buf: str) -> None:
-            if buf:
-                chunks.append(buf)
-
-        for part in parts:
-            if not part:
-                continue
-            if part.startswith("\n"):
-                # Keep paragraph separators attached to previous chunk when possible.
-                if chunks and len(chunks[-1]) + len(part) <= max_chars:
-                    chunks[-1] += part
-                else:
-                    chunks.append(part)
-                continue
-
-            if len(part) <= max_chars:
-                chunks.append(part)
-                continue
-
-            # Further split by sentences (keep punctuation).
-            sentences = re.split(r"(?<=[。！？!?\\.])", part)
-            buf = ""
-            for s in sentences:
-                if not s:
-                    continue
-                if len(s) > max_chars:
-                    # Fallback: hard slice.
-                    flush(buf)
-                    buf = ""
-                    for i in range(0, len(s), max_chars):
-                        chunks.append(s[i : i + max_chars])
-                    continue
-
-                if not buf:
-                    buf = s
-                    continue
-
-                if len(buf) + len(s) <= max_chars:
-                    buf += s
-                else:
-                    flush(buf)
-                    buf = s
-            flush(buf)
-
-        # Final merge: avoid tiny chunks by merging when safe.
-        merged: list[str] = []
-        for c in chunks:
-            if not merged:
-                merged.append(c)
-                continue
-            if len(merged[-1]) + len(c) <= max_chars:
-                merged[-1] += c
-            else:
-                merged.append(c)
-        return merged
-
-    async def _translate_text(text: str, to_lang: str, params: GenerationParams) -> str:
-        max_chars = max(1, int(settings.max_input_chars))
-        if len(text) <= max_chars:
-            return await model.translate(text=text, to_lang=to_lang, params=params)
-
-        chunks = _split_long_text(text, max_chars)
-        # If input is extremely long, chunk count can be large; keep it predictable.
-        out_parts: list[str] = []
-        for ch in chunks:
-            out_parts.append(await model.translate(text=ch, to_lang=to_lang, params=params))
-        return "".join(out_parts)
-
     async def _safe_translate(text: str, to_lang: str, params: GenerationParams) -> str:
         try:
-            return await _translate_text(text=text, to_lang=to_lang, params=params)
-        except Exception as e:
-            raise HTTPException(status_code=503, detail=f"translation backend error: {type(e).__name__}: {e}")
-
-    async def _safe_translate_many(texts: list[str], to_lang: str, params: GenerationParams) -> list[str]:
-        try:
-            return await model.translate_many(texts, to_lang, params)
+            return await translate_text(
+                model,
+                text=text,
+                to_lang=to_lang,
+                params=params,
+                max_input_chars=settings.max_input_chars,
+            )
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"translation backend error: {type(e).__name__}: {e}")
 
@@ -269,7 +184,6 @@ def make_app(model: TranslationModel, settings: Settings) -> FastAPI:
                 detail=f"text_list too large ({len(req.text_list)}); limit is IMME_MAX_TEXTS={settings.imme_max_texts}",
             )
 
-        detected_list = [source_lang if source_lang is not None else detect_language_code(t) for t in req.text_list]
         params = GenerationParams(
             max_new_tokens=settings.max_new_tokens,
             temperature=settings.temperature,
@@ -277,48 +191,20 @@ def make_app(model: TranslationModel, settings: Settings) -> FastAPI:
             top_k=settings.top_k,
             repetition_penalty=settings.repetition_penalty,
         )
-
-        translated_list: list[str]
-        if settings.imme_batch != "off" and len(req.text_list) > 1:
-            try:
-                batch_size = max(1, int(settings.imme_batch_size))
-                translated_list = []
-                for i in range(0, len(req.text_list), batch_size):
-                    batch = req.text_list[i : i + batch_size]
-                    # Avoid batched generate on very long segments; translate those sequentially with chunking.
-                    if any(len(t) > settings.max_input_chars for t in batch):
-                        for t in batch:
-                            translated_list.append(await _safe_translate(text=t, to_lang=target_lang, params=params))
-                        continue
-
-                    translated_list.extend(await _safe_translate_many(batch, target_lang, params))
-            except HTTPException:
-                if settings.imme_batch == "on":
-                    raise
-                translated_list = []
-                for t in req.text_list:
-                    translated_list.append(await _safe_translate(text=t, to_lang=target_lang, params=params))
-            except Exception:
-                if settings.imme_batch == "on":
-                    raise
-                translated_list = []
-                for t in req.text_list:
-                    translated_list.append(await _safe_translate(text=t, to_lang=target_lang, params=params))
-        else:
-            translated_list = []
-            for t in req.text_list:
-                translated_list.append(await _safe_translate(text=t, to_lang=target_lang, params=params))
-
-        if len(translated_list) != len(detected_list):
-            # Shouldn't happen; keep correctness over speed.
-            if settings.imme_batch == "on":
-                raise RuntimeError("translate_many returned unexpected length")
-            translated_list = []
-            for t in req.text_list:
-                translated_list.append(await _safe_translate(text=t, to_lang=target_lang, params=params))
-
-        out = [{"detected_source_lang": detected_list[i], "text": translated_list[i]} for i in range(len(detected_list))]
-        return {"translations": out}
+        try:
+            out = await translate_imme(
+                model,
+                text_list=req.text_list,
+                target_lang=target_lang,
+                source_lang=source_lang,
+                params=params,
+                max_input_chars=settings.max_input_chars,
+                batch_mode=settings.imme_batch,
+                batch_size=settings.imme_batch_size,
+            )
+            return {"translations": out}
+        except Exception as e:
+            raise HTTPException(status_code=503, detail=f"translation backend error: {type(e).__name__}: {e}")
 
     # HCFY compatibility (very small mapping, same as LinguaSpark/server)
     HCFY_LANGUAGE_CODE_MAP = [("中文(简体)", "zh"), ("英语", "en"), ("日语", "jp")]

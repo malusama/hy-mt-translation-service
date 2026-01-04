@@ -59,3 +59,35 @@ curl -X POST "http://<POD_HOST>:<PUBLIC_PORT>/imme" \
   -H "Content-Type: application/json" \
   -d '{"source_lang":"auto","target_lang":"zh","text_list":["Hello world","How are you?"]}'
 ```
+
+## Serverless：scale-to-zero（配合网关提供 HTTP）
+
+Serverless 适合“绝大多数时间没请求”的场景：`active_workers=0` 时可 scale-to-zero，基本不收空闲 GPU 费用；代价是有 **冷启动**（尤其第一次需要加载模型/权重）。
+
+RunPod Serverless 对外是 Job API，不是 `POST /imme` 这种原生 HTTP 路由。若要给浏览器/插件提供稳定的 HTTP 地址，推荐加一层 Cloudflare Worker 网关（本仓库提供 `cloudflare-worker/`）。
+
+### 1) 部署 Serverless（runpodctl）
+
+1) 把 `runpod.toml` 里的 `[project].uuid` 替换成你自己的 RunPod Project UUID。
+
+2) 确保 RunPod 项目里创建了 Network Volume（用于 `HF_HOME=/runpod-volume/hf` 缓存模型）。
+
+3) 部署：
+
+```bash
+runpodctl project deploy
+```
+
+推荐环境变量（Endpoint Environment Variables）：
+
+- `MODEL_ID=tencent/HY-MT1.5-1.8B`
+- `DEVICE=cuda`
+- `DTYPE=float16`
+- `HF_HOME=/runpod-volume/hf`
+- `MAX_NEW_TOKENS=1024`
+- `MAX_INPUT_CHARS=2000`（长文本自动分块拼接，避免“看似成功但被截断”）
+- `IMME_BATCH_SIZE=32`、`IMME_MAX_TEXTS=1024`（防止超大 `text_list` OOM）
+
+### 2) 部署 Cloudflare Worker 网关
+
+见 `cloudflare-worker/README.md`。
