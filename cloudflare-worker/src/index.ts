@@ -143,6 +143,14 @@ function routeToInput(pathname: string, body: Json): Json {
   return { action: p.slice(1), ...body };
 }
 
+function asStringArray(v: unknown): string[] | null {
+  if (!Array.isArray(v)) return null;
+  for (const item of v) {
+    if (typeof item !== "string") return null;
+  }
+  return v as string[];
+}
+
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
@@ -177,6 +185,21 @@ export default {
 
     const input = routeToInput(url.pathname, body);
     const forceAsync = url.searchParams.get("async") === "1";
+
+    // Gateway-side guardrails to avoid Serverless OOM / pathological requests.
+    if (input.action === "imme") {
+      const texts = asStringArray(input.text_list);
+      if (texts) {
+        const maxTexts = 256;
+        if (texts.length > maxTexts) {
+          return jsonResponse(
+            req,
+            { error: `text_list too large (${texts.length}); please split and retry`, max_texts: maxTexts },
+            { status: 413 }
+          );
+        }
+      }
+    }
 
     try {
       const run = await runpodRun(env, input);
