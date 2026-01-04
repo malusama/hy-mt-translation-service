@@ -29,7 +29,12 @@ function textResponse(req: Request, text: string, init?: ResponseInit) {
   const headers = corsHeaders(req);
   if (init?.headers) new Headers(init.headers).forEach((v, k) => headers.set(k, v));
   headers.set("content-type", "text/plain; charset=utf-8");
-  return new Response(text, { ...init, headers });
+  const status = init?.status ?? 200;
+  // Per Fetch spec, these statuses must not include a response body.
+  if (status === 101 || status === 204 || status === 205 || status === 304) {
+    return new Response(null, { ...init, status, headers });
+  }
+  return new Response(text, { ...init, status, headers });
 }
 
 function authOk(req: Request, env: Env): boolean {
@@ -142,7 +147,7 @@ export default {
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
 
-    if (req.method === "OPTIONS") return textResponse(req, "ok", { status: 204 });
+    if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(req) });
     if (!authOk(req, env)) return jsonResponse(req, { error: "unauthorized" }, { status: 401 });
 
     if (req.method === "GET" && (url.pathname === "/health" || url.pathname === "/")) {
@@ -198,4 +203,3 @@ export default {
     }
   },
 };
-

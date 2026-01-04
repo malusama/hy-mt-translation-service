@@ -10,11 +10,17 @@ name = "hy-mt-mlx-translation-service"
 uuid = "<your-runpod-project-uuid>"
 base_image = "runpod/base:0.6.1-cuda11.8.0"
 gpu_types = [
-  "NVIDIA RTX A5000",
-  "NVIDIA A30",
-  "NVIDIA GeForce RTX 4090",
-  "NVIDIA GeForce RTX 3090",
-  "NVIDIA Tesla V100-PCIE-16GB",
+  # Prefer cheaper / more common GPUs first to improve availability.
+  "NVIDIA RTX A4000",            # 16/20GB
+  "NVIDIA RTX A4500",            # 20GB
+  "NVIDIA GeForce RTX 3080 Ti",  # 12/20GB
+  "NVIDIA GeForce RTX 3080",     # 10GB
+  "NVIDIA GeForce RTX 3070",     # 8GB (may be tight for large batch)
+  "NVIDIA GeForce RTX 3090",     # 24GB
+  "NVIDIA RTX A5000",            # 24GB
+  "NVIDIA L4",                   # 24GB (availability varies)
+  "NVIDIA GeForce RTX 4090",     # 24GB
+  "NVIDIA Tesla V100-PCIE-16GB", # 16GB
 ]
 gpu_count = 1
 volume_mount_path = "/runpod-volume"
@@ -30,4 +36,3 @@ flashboot = true
 python_version = "3.11"
 handler_path = "src/handler.py"
 requirements_path = "builder/requirements.txt"
-

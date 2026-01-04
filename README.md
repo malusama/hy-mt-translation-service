@@ -16,6 +16,12 @@
 
 ## 快速开始
 
+一键启动（推荐）：
+
+```bash
+bash scripts/dev.sh
+```
+
 ```bash
 cd hy-mt-mlx-translation-service
 uv venv --python python3.11
@@ -42,6 +48,22 @@ hy-mt-server
 ```bash
 curl http://127.0.0.1:3000/health
 ```
+
+## macOS 自启动（launchd）
+
+安装并立即启动：
+
+```bash
+bash scripts/launchd-install.sh
+```
+
+卸载：
+
+```bash
+bash scripts/launchd-uninstall.sh
+```
+
+说明：自启动默认用 `scripts/dev.sh --no-install`（假设你已经安装好依赖/创建好 `.venv`）。如果你想让它在首次启动时也自动安装依赖，把 plist 里的 `--no-install` 去掉即可。
 
 ## Docker（注意）
 
