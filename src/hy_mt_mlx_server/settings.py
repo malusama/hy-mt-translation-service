@@ -20,3 +20,6 @@ class Settings(BaseModel):
     model_max_concurrency: int = Field(default=1, alias="MODEL_MAX_CONCURRENCY")
     uvicorn_workers: int = Field(default=1, alias="UVICORN_WORKERS")
     imme_batch: str = Field(default="auto", alias="IMME_BATCH")  # auto | on | off
+    max_input_chars: int = Field(default=2000, alias="MAX_INPUT_CHARS")
+    imme_batch_size: int = Field(default=32, alias="IMME_BATCH_SIZE")
+    imme_max_texts: int = Field(default=1024, alias="IMME_MAX_TEXTS")

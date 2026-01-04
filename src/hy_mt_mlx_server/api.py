@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import time
+import re
 from typing import Any, Optional
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
@@ -66,12 +67,15 @@ def get_settings() -> Settings:
     else:
         model_id = default_mlx_model_id if has_mlx_backend() else default_transformers_model_id
 
+    max_new_tokens = _int("MAX_NEW_TOKENS", 1024)
+    max_input_chars_default = min(2000, max_new_tokens)
+
     return Settings(
         HOST=os.getenv("HOST", "127.0.0.1"),
         PORT=_int("PORT", 3000),
         API_KEY=os.getenv("API_KEY", ""),
         MODEL_ID=model_id,
-        MAX_NEW_TOKENS=_int("MAX_NEW_TOKENS", 1024),
+        MAX_NEW_TOKENS=max_new_tokens,
         TEMPERATURE=_float("TEMPERATURE", 0.0),
         TOP_P=_float("TOP_P", 0.6),
         TOP_K=_int("TOP_K", 20),
@@ -83,6 +87,9 @@ def get_settings() -> Settings:
         MODEL_MAX_CONCURRENCY=_int("MODEL_MAX_CONCURRENCY", 1),
         UVICORN_WORKERS=_int("UVICORN_WORKERS", _int("WORKERS", 1)),
         IMME_BATCH=_imme_batch(os.getenv("IMME_BATCH", "auto")),
+        MAX_INPUT_CHARS=_int("MAX_INPUT_CHARS", max_input_chars_default),
+        IMME_BATCH_SIZE=_int("IMME_BATCH_SIZE", 32),
+        IMME_MAX_TEXTS=_int("IMME_MAX_TEXTS", 1024),
     )
 
 
@@ -121,9 +128,94 @@ def make_app(model: TranslationModel, settings: Settings) -> FastAPI:
     async def detect(req: DetectRequest) -> DetectResponse:
         return DetectResponse(language=detect_language_code(req.text))
 
+    def _split_long_text(text: str, max_chars: int) -> list[str]:
+        """
+        Best-effort chunking for very long inputs.
+
+        Goals:
+        - Keep formatting boundaries (newlines) as much as possible.
+        - Keep each chunk <= max_chars (approx), so generation isn't silently truncated by MAX_NEW_TOKENS.
+        """
+        if max_chars <= 0:
+            return [text]
+        if len(text) <= max_chars:
+            return [text]
+
+        # Split paragraphs but keep separators.
+        parts = re.split(r"(\n{2,})", text)
+        chunks: list[str] = []
+
+        def flush(buf: str) -> None:
+            if buf:
+                chunks.append(buf)
+
+        for part in parts:
+            if not part:
+                continue
+            if part.startswith("\n"):
+                # Keep paragraph separators attached to previous chunk when possible.
+                if chunks and len(chunks[-1]) + len(part) <= max_chars:
+                    chunks[-1] += part
+                else:
+                    chunks.append(part)
+                continue
+
+            if len(part) <= max_chars:
+                chunks.append(part)
+                continue
+
+            # Further split by sentences (keep punctuation).
+            sentences = re.split(r"(?<=[。！？!?\\.])", part)
+            buf = ""
+            for s in sentences:
+                if not s:
+                    continue
+                if len(s) > max_chars:
+                    # Fallback: hard slice.
+                    flush(buf)
+                    buf = ""
+                    for i in range(0, len(s), max_chars):
+                        chunks.append(s[i : i + max_chars])
+                    continue
+
+                if not buf:
+                    buf = s
+                    continue
+
+                if len(buf) + len(s) <= max_chars:
+                    buf += s
+                else:
+                    flush(buf)
+                    buf = s
+            flush(buf)
+
+        # Final merge: avoid tiny chunks by merging when safe.
+        merged: list[str] = []
+        for c in chunks:
+            if not merged:
+                merged.append(c)
+                continue
+            if len(merged[-1]) + len(c) <= max_chars:
+                merged[-1] += c
+            else:
+                merged.append(c)
+        return merged
+
+    async def _translate_text(text: str, to_lang: str, params: GenerationParams) -> str:
+        max_chars = max(1, int(settings.max_input_chars))
+        if len(text) <= max_chars:
+            return await model.translate(text=text, to_lang=to_lang, params=params)
+
+        chunks = _split_long_text(text, max_chars)
+        # If input is extremely long, chunk count can be large; keep it predictable.
+        out_parts: list[str] = []
+        for ch in chunks:
+            out_parts.append(await model.translate(text=ch, to_lang=to_lang, params=params))
+        return "".join(out_parts)
+
     async def _safe_translate(text: str, to_lang: str, params: GenerationParams) -> str:
         try:
-            return await model.translate(text=text, to_lang=to_lang, params=params)
+            return await _translate_text(text=text, to_lang=to_lang, params=params)
         except Exception as e:
             raise HTTPException(status_code=503, detail=f"translation backend error: {type(e).__name__}: {e}")
 
@@ -171,6 +263,12 @@ def make_app(model: TranslationModel, settings: Settings) -> FastAPI:
         if not req.text_list:
             return {"translations": []}
 
+        if settings.imme_max_texts > 0 and len(req.text_list) > settings.imme_max_texts:
+            raise HTTPException(
+                status_code=413,
+                detail=f"text_list too large ({len(req.text_list)}); limit is IMME_MAX_TEXTS={settings.imme_max_texts}",
+            )
+
         detected_list = [source_lang if source_lang is not None else detect_language_code(t) for t in req.text_list]
         params = GenerationParams(
             max_new_tokens=settings.max_new_tokens,
@@ -183,7 +281,17 @@ def make_app(model: TranslationModel, settings: Settings) -> FastAPI:
         translated_list: list[str]
         if settings.imme_batch != "off" and len(req.text_list) > 1:
             try:
-                translated_list = await _safe_translate_many(req.text_list, target_lang, params)
+                batch_size = max(1, int(settings.imme_batch_size))
+                translated_list = []
+                for i in range(0, len(req.text_list), batch_size):
+                    batch = req.text_list[i : i + batch_size]
+                    # Avoid batched generate on very long segments; translate those sequentially with chunking.
+                    if any(len(t) > settings.max_input_chars for t in batch):
+                        for t in batch:
+                            translated_list.append(await _safe_translate(text=t, to_lang=target_lang, params=params))
+                        continue
+
+                    translated_list.extend(await _safe_translate_many(batch, target_lang, params))
             except HTTPException:
                 if settings.imme_batch == "on":
                     raise

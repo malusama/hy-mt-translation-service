@@ -87,6 +87,7 @@ docker run --rm -p 3000:3000 \
 - `TOP_P`：默认 `0.6`（仅在 `TEMPERATURE>0` 时生效）
 - `TOP_K`：默认 `20`（仅在 `TEMPERATURE>0` 时生效）
 - `REPETITION_PENALTY`：默认 `1.05`
+- `MAX_INPUT_CHARS`：单段文本超过该长度会自动分块翻译再拼接（用于避免长文在上下文/输出上限下“看似成功但被截断”）
 - `PRELOAD_MODEL`：默认 `1`，设为 `0` 可跳过启动时预加载（首次请求再加载）
 - `BACKEND`：`auto|mlx|transformers`（默认 `auto`；Docker 默认用 `transformers`）
 - `DEVICE`：`auto|cpu|cuda`（transformers 用）
@@ -94,6 +95,8 @@ docker run --rm -p 3000:3000 \
 - `MODEL_MAX_CONCURRENCY`：每个进程允许同时进行的生成次数（默认 `1`；过大可能导致卡顿/内存飙升）
 - `UVICORN_WORKERS`：Uvicorn 多进程 worker 数（默认 `1`；每个 worker 会各自加载一份模型）
 - `IMME_BATCH`：`/imme` 是否尝试批量翻译：`auto|on|off`（默认 `auto`；失败会回退为逐条翻译）
+- `IMME_BATCH_SIZE`：`/imme` 批量翻译时的分批大小（防止超大 `text_list` 触发 OOM）
+- `IMME_MAX_TEXTS`：`/imme` 允许的 `text_list` 最大段数（超过返回 413）
 
 ## 并发/性能建议
 
