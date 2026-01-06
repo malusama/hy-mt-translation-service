@@ -1,7 +1,10 @@
 # RunPod Project Configuration (Serverless)
 #
-# This repo's primary interface is HTTP (`/imme`, `/translate`, ...). RunPod Serverless is job-based,
-# so we deploy a handler (`src/handler.py`) that implements the same request/response schemas via `job.input`.
+# NOTE: This file was used for a "Traditional (Job API)" style serverless deployment.
+# The current recommended RunPod path is to build/push a Docker image:
+# - Load Balancing (HTTP Workers): `Dockerfile.runpod.loadbalancing` (supports SSE streaming)
+# - Traditional (Job API): `Dockerfile.runpod.serverless` + `cloudflare-worker/`
+# See `RUNPOD.md`.
 
 name = "hy-mt-mlx-translation-service"
 

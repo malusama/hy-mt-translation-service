@@ -1,5 +1,6 @@
 .git
 .venv
+.logs
 __pycache__
 *.pyc
 .ruff_cache
@@ -9,3 +10,5 @@ build
 *.egg-info
 .DS_Store
 model
+rust-web/target
+cloudflare-worker/node_modules

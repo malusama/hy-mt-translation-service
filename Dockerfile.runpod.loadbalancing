@@ -1,0 +1,39 @@
+# RunPod Serverless (Load Balancing / HTTP workers):
+# - Starts `llama-server` (GGUF) + Rust web (OpenAI-style + /imme|/translate|/detect).
+# - No Python / no job handler; suitable for direct HTTP access (supports SSE streaming).
+
+FROM ghcr.io/ggml-org/llama.cpp:server-cuda AS llama_bin
+
+FROM rust:1.91-bookworm AS rust_builder
+
+WORKDIR /build
+
+COPY rust-web/Cargo.toml rust-web/Cargo.lock /build/rust-web/
+COPY rust-web/src /build/rust-web/src
+
+RUN cargo build --release --manifest-path /build/rust-web/Cargo.toml
+
+FROM nvidia/cuda:11.8.0-runtime-ubuntu22.04
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates \
+    curl \
+    libcurl4 \
+  && rm -rf /var/lib/apt/lists/*
+
+COPY --from=llama_bin /app/ /opt/llama/
+RUN ln -sf /opt/llama/llama-server /usr/local/bin/llama-server
+ENV LD_LIBRARY_PATH="/opt/llama:${LD_LIBRARY_PATH}"
+COPY --from=rust_builder /build/rust-web/target/release/hy-mt-rust-web /usr/local/bin/hy-mt-rust-web
+
+COPY scripts/runpod-loadbalancing-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
+ENV HOST=0.0.0.0 \
+    PORT=3000 \
+    LLAMA_SERVER_HOST=127.0.0.1 \
+    LLAMA_SERVER_PORT=18080
+
+EXPOSE 3000
+
+CMD ["/entrypoint.sh"]
