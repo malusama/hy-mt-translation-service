@@ -1,18 +1,19 @@
-# HY-MT (MLX) Translation Service
+# HY-MT (GGUF / llama.cpp) Translation Service
 
-用 `mlx`/`mlx-lm` 在 Apple Silicon 上运行 `tencent/HY-MT1.5-1.8B`（推荐直接用已转换的 MLX 权重），并提供与 `LinguaSpark/server` 类似的 API，给沉浸式翻译等插件调用。
+用 **GGUF + llama.cpp** 在本地运行 `tencent/HY-MT1.5-1.8B`（建议下载官方 GGUF 量化），并提供与 `LinguaSpark/server` 类似的 API，给沉浸式翻译等插件调用；同时支持 **OpenAI 风格 SSE 流式输出**。
 
 ## 部署方式一览
 
-- **macOS + Apple Silicon**：`mlx/mlx-lm`（最低延迟/本机自用）
-- **Linux / 无 GPU**：Docker + `transformers`（CPU，较慢）
-- **Linux + NVIDIA GPU（RunPod 等）**：`transformers + CUDA`（推荐，见 `RUNPOD.md`）
-- **RunPod Serverless（Worker 网关）**：scale-to-zero 更省钱；用 `cloudflare-worker/` 把 Job API 变成 HTTP（见 `RUNPOD.md` / `cloudflare-worker/README.md`）
+- **macOS + Apple Silicon**：llama.cpp（可选 Metal 加速）
+- **Linux / 无 GPU**：llama.cpp（CPU）
+- **Linux + NVIDIA GPU（RunPod 等）**：llama.cpp（可选 CUDA）
+- **RunPod Serverless（Worker 网关）**：仍可用（但不适合逐 token SSE 流式）
 
 ## 运行环境
 
-- macOS + Apple Silicon
-- Python 3.11（建议用 `uv` 创建 venv）
+- Rust toolchain（建议 `stable`）
+- C/C++ toolchain + `cmake`（用于编译 llama.cpp）
+- 模型文件：本地 `.gguf`
 
 ## 快速开始
 
@@ -22,25 +23,16 @@
 bash scripts/dev.sh
 ```
 
-```bash
-cd hy-mt-mlx-translation-service
-uv venv --python python3.11
-source .venv/bin/activate
-uv pip install -e '.[mlx]'
+说明：
+- **macOS Apple Silicon（推荐）**：`scripts/dev.sh` 默认启动 **MLX** 后端（`BACKEND=mlx`，接口 `/imme`/`/translate` 等）。
+- **GGUF/llama.cpp**：使用 `bash scripts/run-rust.sh`（需要 `MODEL_GGUF` + 本机 `llama-server`）。
 
-# 启动
-export HOST=127.0.0.1
-export PORT=3000
-export MODEL_ID=m-i/HY-MT1.5-1.8B-mlx-8Bit
-hy-mt-server
-```
-
-也可以用环境文件：
+准备环境文件：
 
 ```bash
 cp .env.example .env
 set -a && source .env && set +a
-hy-mt-server
+bash scripts/dev.sh
 ```
 
 健康检查：
@@ -48,6 +40,17 @@ hy-mt-server
 ```bash
 curl http://127.0.0.1:3000/health
 ```
+
+## 模型（GGUF）
+
+下载 `tencent/HY-MT1.5-1.8B-GGUF` 的某个量化文件到本地，然后在 `.env` 里设置 `MODEL_GGUF=/path/to/model.gguf`。
+
+## OpenAI 风格流式输出（SSE）
+
+- `POST /v1/chat/completions`（支持 `stream=true`；额外支持自定义字段 `to`/`from`）
+- 兼容接口也可用 `?stream=1`：`POST /translate?stream=1` / `POST /imme?stream=1`
+
+说明：RunPod Serverless（Job API + 轮询）这条链路天然不适合做逐 token SSE 流式；如需流式，建议使用 Pods（长驻 HTTP）或自建常驻服务。
 
 ## macOS 自启动（launchd）
 
@@ -63,47 +66,17 @@ bash scripts/launchd-install.sh
 bash scripts/launchd-uninstall.sh
 ```
 
-说明：自启动默认用 `scripts/dev.sh --no-install`（假设你已经安装好依赖/创建好 `.venv`）。如果你想让它在首次启动时也自动安装依赖，把 plist 里的 `--no-install` 去掉即可。
+说明：自启动默认运行 Rust Web（`scripts/run-rust.sh --no-build`），并在脚本内读取 `.env`（包括 `MODEL_GGUF`）。
 
 ## Docker（注意）
 
-`mlx`/`mlx-lm` 依赖 macOS + Metal，无法在 Linux Docker 容器里安装/运行。仓库里的 `Dockerfile` 会使用 `transformers` 后端提供同样的 API（更通用，但在纯 CPU 上会更慢）。
-
-构建镜像：
-
-```bash
-docker build -t hy-mt-service .
-```
-
-启动：
-
-```bash
-docker run --rm -p 3000:3000 hy-mt-service
-```
-
-推荐：运行时挂载 **HF 缓存目录**（避免每次重启重复下载）：
-
-```bash
-docker run --rm -p 3000:3000 \
-  -v hy-mt-hf-cache:/root/.cache/huggingface \
-  hy-mt-service
-```
-
-如果你已经把模型下载到本地目录，也可以直接挂载（完全离线）：
-
-```bash
-docker run --rm -p 3000:3000 \
-  -v "$PWD/model:/opt/model:ro" \
-  -e MODEL_ID=/opt/model \
-  -e TRANSFORMERS_OFFLINE=1 \
-  hy-mt-service
-```
+当前主路径是 Rust + llama.cpp；如需容器化建议自行构建镜像并挂载 `.gguf` 模型文件（本仓库旧的 Python/Docker 方案仅作参考）。
 
 ## 环境变量
 
 - `HOST`：监听地址，默认 `127.0.0.1`
 - `PORT`：端口，默认 `3000`
-- `MODEL_ID`：HF 模型 ID（`mlx` 默认 `m-i/HY-MT1.5-1.8B-mlx-8Bit`；`transformers` 默认 `tencent/HY-MT1.5-1.8B`）
+- `MODEL_GGUF`：本地 GGUF 模型路径（必填）
 - `API_KEY`：可选，设置后要求 `Authorization: Bearer <key>` 或 `?token=<key>`
 - `MAX_NEW_TOKENS`：默认 `1024`
 - `TEMPERATURE`：默认 `0`（翻译推荐用确定性输出）
@@ -111,15 +84,11 @@ docker run --rm -p 3000:3000 \
 - `TOP_K`：默认 `20`（仅在 `TEMPERATURE>0` 时生效）
 - `REPETITION_PENALTY`：默认 `1.05`
 - `MAX_INPUT_CHARS`：单段文本超过该长度会自动分块翻译再拼接（用于避免长文在上下文/输出上限下“看似成功但被截断”）
-- `PRELOAD_MODEL`：默认 `1`，设为 `0` 可跳过启动时预加载（首次请求再加载）
-- `BACKEND`：`auto|mlx|transformers`（默认 `auto`；Docker 默认用 `transformers`）
-- `DEVICE`：`auto|cpu|cuda`（transformers 用）
-- `DTYPE`：`auto|float16|bfloat16|float32`（transformers 用）
 - `MODEL_MAX_CONCURRENCY`：每个进程允许同时进行的生成次数（默认 `1`；过大可能导致卡顿/内存飙升）
-- `UVICORN_WORKERS`：Uvicorn 多进程 worker 数（默认 `1`；每个 worker 会各自加载一份模型）
-- `IMME_BATCH`：`/imme` 是否尝试批量翻译：`auto|on|off`（默认 `auto`；失败会回退为逐条翻译）
-- `IMME_BATCH_SIZE`：`/imme` 批量翻译时的分批大小（防止超大 `text_list` 触发 OOM）
 - `IMME_MAX_TEXTS`：`/imme` 允许的 `text_list` 最大段数（超过返回 413）
+- `LLAMA_FEATURES`：编译 features（macOS 建议 `metal`；Linux NVIDIA 建议 `cuda`）
+- `LLAMA_N_GPU_LAYERS`：加载到 GPU 的层数（默认 `0`）
+- `LLAMA_N_CTX`：上下文长度（默认 `0` 表示使用模型默认）
 
 ## 并发/性能建议
 

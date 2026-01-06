@@ -2,7 +2,7 @@
 
 本项目的 `mlx/mlx-lm` 后端只能在 macOS + Apple Silicon 上跑；RunPod 属于 Linux + NVIDIA GPU。
 
-注意：`tencent/HY-MT1.5-1.8B` 当前的模型架构在 **vLLM 里还不受支持**（即使升级 Transformers 也会报 *architectures are not supported*），因此在 RunPod 上建议直接用本项目的 **transformers + CUDA** 后端跑推理。
+`tencent/HY-MT1.5-1.8B` 的架构在 **vLLM 里可能不受支持**，但可以用 **GGUF + llama.cpp** 在 Linux + NVIDIA GPU 上直接跑（并且支持 OpenAI 风格 SSE 流式输出）。
 
 ## 你应该用 Pods（长驻服务）
 
@@ -64,30 +64,55 @@ curl -X POST "http://<POD_HOST>:<PUBLIC_PORT>/imme" \
 
 Serverless 适合“绝大多数时间没请求”的场景：`active_workers=0` 时可 scale-to-zero，基本不收空闲 GPU 费用；代价是有 **冷启动**（尤其第一次需要加载模型/权重）。
 
-RunPod Serverless 对外是 Job API，不是 `POST /imme` 这种原生 HTTP 路由。若要给浏览器/插件提供稳定的 HTTP 地址，推荐加一层 Cloudflare Worker 网关（本仓库提供 `cloudflare-worker/`）。
+RunPod Serverless 有两种形态：
 
-### 1) 部署 Serverless（runpodctl）
+- **Load Balancing（HTTP Workers）**：对外就是 HTTP（推荐；可直接支持 SSE 流式输出）。
+- **Traditional（Job API）**：对外是 `/run` + `/status` 的 Job API（如需给浏览器/插件提供稳定 HTTP 地址，建议加一层 Cloudflare Worker 网关，本仓库提供 `cloudflare-worker/`）。
 
-1) 把 `runpod.toml` 里的 `[project].uuid` 替换成你自己的 RunPod Project UUID。
+### 1) Load Balancing（推荐：直接 HTTP + 支持 SSE）
 
-2) 确保 RunPod 项目里创建了 Network Volume（用于 `HF_HOME=/runpod-volume/hf` 缓存模型）。
-
-3) 部署：
+构建并推送镜像：
 
 ```bash
-runpodctl project deploy
+docker buildx build --platform linux/amd64 \
+  -f Dockerfile.runpod.loadbalancing \
+  -t <your-registry>/hy-mt-gguf-llama-rust:runpod-lb \
+  --push .
 ```
+
+在 RunPod 创建 **Serverless Endpoint（Load Balancing）**，并配置：
+
+- **Image**：`<your-registry>/hy-mt-gguf-llama-rust:runpod-lb`
+- **Expose 端口**：`3000`
+- **Volume（建议）**：挂载到 `/runpod-volume`（用于缓存 GGUF 文件，避免每次冷启动重复下载）
 
 推荐环境变量（Endpoint Environment Variables）：
 
-- `MODEL_ID=tencent/HY-MT1.5-1.8B`
-- `DEVICE=cuda`
-- `DTYPE=float16`
-- `HF_HOME=/runpod-volume/hf`
-- `MAX_NEW_TOKENS=1024`
-- `MAX_INPUT_CHARS=2000`（长文本自动分块拼接，避免“看似成功但被截断”）
-- `IMME_BATCH_SIZE=32`、`IMME_MAX_TEXTS=1024`（防止超大 `text_list` OOM）
+- `MODEL_GGUF_URL=https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF/resolve/main/HY-MT1.5-1.8B-Q4_K_M.gguf`
+- `MODEL_DIR=/runpod-volume/models`
+- `LLAMA_N_GPU_LAYERS=999`（尽量全上 GPU；OOM 再调小）
+- `MAX_NEW_TOKENS=1024`、`TEMPERATURE=0`、`TOP_P=0.6`
+- （可选）`API_KEY=...`（开启后所有请求需带 `Authorization: Bearer <API_KEY>` 或 `?token=`）
 
-### 2) 部署 Cloudflare Worker 网关
+验证（拿到对外映射的 `3000` 端口后）：
+
+```bash
+curl http://<POD_HOST>:<PUBLIC_PORT>/health
+```
+
+### 2) Traditional（Job API：兼容 Cloudflare Worker 网关）
+
+构建并推送镜像：
+
+```bash
+docker buildx build --platform linux/amd64 \
+  -f Dockerfile.runpod.serverless \
+  -t <your-registry>/hy-mt-gguf-llama-rust:runpod-job \
+  --push .
+```
+
+在 RunPod 创建 **Serverless Endpoint（Traditional）**，并使用 `cloudflare-worker/` 将 `/imme|/translate|/detect` 转成 Job API。
+
+### 3) 部署 Cloudflare Worker 网关（Traditional 才需要）
 
 见 `cloudflare-worker/README.md`。
