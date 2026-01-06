@@ -1,8 +1,14 @@
 type Env = {
-  RUNPOD_API_KEY: string;
-  RUNPOD_ENDPOINT_ID: string;
+  RUNPOD_API_KEY?: string;
+  RUNPOD_ENDPOINT_ID?: string;
   RUNPOD_API_BASE?: string;
   CLIENT_API_KEY?: string;
+  // Preferred: direct HTTP upstream (RunPod Serverless Load Balancing / HTTP Workers).
+  UPSTREAM_BASE_URL?: string;
+  // Optional upstream auth (Bearer). If set, worker injects it when proxying upstream.
+  UPSTREAM_API_KEY?: string;
+  // If true, forwards client Authorization header to upstream (when UPSTREAM_API_KEY not set).
+  FORWARD_AUTH?: string;
 };
 
 type Json = Record<string, unknown>;
@@ -45,6 +51,11 @@ function authOk(req: Request, env: Env): boolean {
   return Boolean(m && m[1] === expected);
 }
 
+function boolEnv(v: string | undefined): boolean {
+  const s = (v || "").trim().toLowerCase();
+  return s === "1" || s === "true" || s === "yes" || s === "on";
+}
+
 async function parseJsonBody(req: Request): Promise<Json> {
   const ct = req.headers.get("content-type") || "";
   if (!ct.toLowerCase().includes("application/json")) {
@@ -83,14 +94,23 @@ function withTimeout(ms: number) {
   return { signal: controller.signal, cancel: () => clearTimeout(t) };
 }
 
+function requireRunpod(env: Env): { apiKey: string; endpointId: string } {
+  const apiKey = (env.RUNPOD_API_KEY || "").trim();
+  const endpointId = (env.RUNPOD_ENDPOINT_ID || "").trim();
+  if (!apiKey) throw new Error("RUNPOD_API_KEY not configured");
+  if (!endpointId) throw new Error("RUNPOD_ENDPOINT_ID not configured");
+  return { apiKey, endpointId };
+}
+
 async function runpodRun(env: Env, input: Json): Promise<RunPodRunResponse> {
-  const url = `${runpodBase(env)}/${env.RUNPOD_ENDPOINT_ID}/run`;
+  const { apiKey, endpointId } = requireRunpod(env);
+  const url = `${runpodBase(env)}/${endpointId}/run`;
   const { signal, cancel } = withTimeout(10_000);
   try {
     const res = await fetch(url, {
       method: "POST",
       headers: {
-        authorization: `Bearer ${env.RUNPOD_API_KEY}`,
+        authorization: `Bearer ${apiKey}`,
         "content-type": "application/json",
       },
       body: JSON.stringify({ input }),
@@ -107,12 +127,13 @@ async function runpodRun(env: Env, input: Json): Promise<RunPodRunResponse> {
 }
 
 async function runpodStatus(env: Env, jobId: string): Promise<RunPodStatusResponse> {
-  const url = `${runpodBase(env)}/${env.RUNPOD_ENDPOINT_ID}/status/${jobId}`;
+  const { apiKey, endpointId } = requireRunpod(env);
+  const url = `${runpodBase(env)}/${endpointId}/status/${jobId}`;
   const { signal, cancel } = withTimeout(10_000);
   try {
     const res = await fetch(url, {
       method: "GET",
-      headers: { authorization: `Bearer ${env.RUNPOD_API_KEY}` },
+      headers: { authorization: `Bearer ${apiKey}` },
       signal,
     });
     const text = await res.text();
@@ -121,6 +142,44 @@ async function runpodStatus(env: Env, jobId: string): Promise<RunPodStatusRespon
   } finally {
     cancel();
   }
+}
+
+function upstreamBase(env: Env): string | null {
+  const raw = (env.UPSTREAM_BASE_URL || "").trim();
+  if (!raw) return null;
+  return raw.replace(/\/+$/, "");
+}
+
+async function upstreamProxy(req: Request, env: Env, url: URL, bodyOverride?: string): Promise<Response> {
+  const base = upstreamBase(env);
+  if (!base) return jsonResponse(req, { error: "UPSTREAM_BASE_URL not configured" }, { status: 500 });
+
+  const target = `${base}${url.pathname}${url.search}`;
+
+  const headers = new Headers(req.headers);
+  headers.delete("host");
+  headers.delete("content-length");
+
+  const forwardAuth = boolEnv(env.FORWARD_AUTH);
+  if (env.UPSTREAM_API_KEY && env.UPSTREAM_API_KEY.trim()) {
+    headers.set("authorization", `Bearer ${env.UPSTREAM_API_KEY.trim()}`);
+  } else if (!forwardAuth) {
+    headers.delete("authorization");
+  }
+
+  const init: RequestInit = {
+    method: req.method,
+    headers,
+    body: bodyOverride !== undefined ? bodyOverride : req.body,
+    redirect: "manual",
+  };
+
+  const res = await fetch(target, init);
+
+  // Copy upstream headers, then add CORS headers (do not buffer body to preserve streaming).
+  const outHeaders = corsHeaders(req);
+  res.headers.forEach((v, k) => outHeaders.set(k, v));
+  return new Response(res.body, { status: res.status, headers: outHeaders });
 }
 
 async function waitForCompletion(env: Env, jobId: string, opts: { maxWaitMs: number; pollMs: number }) {
@@ -158,13 +217,16 @@ export default {
     if (req.method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(req) });
     if (!authOk(req, env)) return jsonResponse(req, { error: "unauthorized" }, { status: 401 });
 
-    if (req.method === "GET" && (url.pathname === "/health" || url.pathname === "/")) {
-      return jsonResponse(req, { ok: true, endpoint: env.RUNPOD_ENDPOINT_ID }, { status: 200 });
-    }
+    const mode = (url.searchParams.get("mode") || "").trim().toLowerCase(); // "upstream" | "job"
+    const hasUpstream = Boolean(upstreamBase(env));
+    const useUpstream = hasUpstream && mode !== "job";
 
     // Proxy job status for async clients: GET /job/<id>
     const jobMatch = url.pathname.match(/^\/job\/([^/]+)$/);
     if (req.method === "GET" && jobMatch) {
+      if (useUpstream) {
+        return jsonResponse(req, { error: "job status is not available in upstream mode; add ?mode=job" }, { status: 400 });
+      }
       try {
         const jobId = decodeURIComponent(jobMatch[1]);
         const status = await runpodStatus(env, jobId);
@@ -174,6 +236,51 @@ export default {
       }
     }
 
+    if (req.method === "GET" && (url.pathname === "/health" || url.pathname === "/")) {
+      if (useUpstream) {
+        // If upstream is configured, surface upstream health directly.
+        const upstreamUrl = new URL(req.url);
+        upstreamUrl.pathname = "/health";
+        upstreamUrl.search = "";
+        return upstreamProxy(req, env, upstreamUrl);
+      }
+      return jsonResponse(req, { ok: true, endpoint: env.RUNPOD_ENDPOINT_ID }, { status: 200 });
+    }
+
+    // In upstream mode, proxy everything (supports SSE streaming).
+    if (useUpstream) {
+      if (req.method === "POST") {
+        let body: Json;
+        try {
+          body = await parseJsonBody(req);
+        } catch (e) {
+          return jsonResponse(req, { error: String(e) }, { status: 400 });
+        }
+
+        // Guardrails to avoid pathological requests.
+        if (url.pathname.replace(/\/+$/, "") === "/imme") {
+          const texts = asStringArray(body.text_list);
+          if (texts) {
+            const maxTexts = 256;
+            if (texts.length > maxTexts) {
+              return jsonResponse(
+                req,
+                { error: `text_list too large (${texts.length}); please split and retry`, max_texts: maxTexts },
+                { status: 413 }
+              );
+            }
+          }
+        }
+
+        // Re-serialize since we've consumed the request body.
+        return upstreamProxy(req, env, url, JSON.stringify(body));
+      }
+
+      // Non-POST: proxy directly (e.g. GET /v1/models).
+      return upstreamProxy(req, env, url);
+    }
+
+    // Job mode (Traditional Serverless): translate HTTP routes into RunPod job API.
     if (req.method !== "POST") return jsonResponse(req, { error: "method not allowed" }, { status: 405 });
 
     let body: Json;

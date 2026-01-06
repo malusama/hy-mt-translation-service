@@ -6,7 +6,14 @@ compatibility_date = "2026-01-04"
 RUNPOD_ENDPOINT_ID = "<your-runpod-endpoint-id>"
 RUNPOD_API_BASE = "https://api.runpod.ai/v2"
 
+# Preferred (streaming): direct HTTP upstream (RunPod Serverless Load Balancing / HTTP Workers)
+# Example: https://<your-runpod-lb-host> (no trailing slash)
+# UPSTREAM_BASE_URL = "https://..."
+# Optional: if the upstream Rust service has API_KEY enabled, set this to forward auth automatically.
+# UPSTREAM_API_KEY = ""
+# Optional: forward the client's Authorization header to upstream (only if you want same token on both sides)
+# FORWARD_AUTH = "0"
+
 # Optional: protect your gateway with a shared secret.
 # If set, clients must send `Authorization: Bearer <CLIENT_API_KEY>`.
 # CLIENT_API_KEY = ""
-
