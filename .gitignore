@@ -14,6 +14,7 @@ build/
 *.egg-info/
 model/
 .cache/
+.logs/
 cloudflare-worker/node_modules/
 cloudflare-worker/.wrangler/
 rust-web/target/
