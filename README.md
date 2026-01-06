@@ -1,19 +1,22 @@
-# HY-MT (GGUF / llama.cpp) Translation Service
+# HY-MT Translation Service (MLX + GGUF/llama.cpp)
 
-用 **GGUF + llama.cpp** 在本地运行 `tencent/HY-MT1.5-1.8B`（建议下载官方 GGUF 量化），并提供与 `LinguaSpark/server` 类似的 API，给沉浸式翻译等插件调用；同时支持 **OpenAI 风格 SSE 流式输出**。
+提供与 `LinguaSpark/server` 类似的 API，给沉浸式翻译等插件调用，支持两种后端：
+
+- **MLX（macOS Apple Silicon）**：本机自用最低延迟（`/imme`、`/translate` 等）
+- **GGUF + llama.cpp（跨平台）**：配合 Rust Web 提供接口，并支持 **OpenAI 风格 SSE 流式输出**
 
 ## 部署方式一览
 
-- **macOS + Apple Silicon**：llama.cpp（可选 Metal 加速）
-- **Linux / 无 GPU**：llama.cpp（CPU）
-- **Linux + NVIDIA GPU（RunPod 等）**：llama.cpp（可选 CUDA）
-- **RunPod Serverless（Worker 网关）**：仍可用（但不适合逐 token SSE 流式）
+- **macOS + Apple Silicon（默认）**：MLX（推荐本机自用）
+- **macOS + Apple Silicon（可选）**：GGUF + llama.cpp（可选 Metal 加速；需要本机 `llama-server`）
+- **Linux / 无 GPU**：GGUF + llama.cpp（CPU）
+- **Linux + NVIDIA GPU（RunPod 等）**：GGUF + llama.cpp（可选 CUDA）
+- **RunPod Serverless（Worker 网关）**：可用（但 Job API 轮询不适合逐 token SSE）
 
 ## 运行环境
 
-- Rust toolchain（建议 `stable`）
-- C/C++ toolchain + `cmake`（用于编译 llama.cpp）
-- 模型文件：本地 `.gguf`
+- **MLX**：Python + `uv`（macOS arm64）
+- **GGUF/llama.cpp**：Rust toolchain + 本机 `llama-server`（或自行编译 llama.cpp）
 
 ## 快速开始
 
@@ -24,8 +27,8 @@ bash scripts/dev.sh
 ```
 
 说明：
-- **macOS Apple Silicon（推荐）**：`scripts/dev.sh` 默认启动 **MLX** 后端（`BACKEND=mlx`，接口 `/imme`/`/translate` 等）。
-- **GGUF/llama.cpp**：使用 `bash scripts/run-rust.sh`（需要 `MODEL_GGUF` + 本机 `llama-server`）。
+- **macOS Apple Silicon**：`scripts/dev.sh` 默认启动 **MLX** 后端（`BACKEND=mlx`）。
+- **其它平台 / 或想用 GGUF/llama.cpp**：直接运行 `bash scripts/run-rust.sh`（需要 `MODEL_GGUF` + 本机 `llama-server`），或在 `.env` 里设置 `BACKEND=rust` 后再跑 `scripts/dev.sh`。
 
 准备环境文件：
 
@@ -43,7 +46,7 @@ curl http://127.0.0.1:3000/health
 
 ## 模型（GGUF）
 
-下载 `tencent/HY-MT1.5-1.8B-GGUF` 的某个量化文件到本地，然后在 `.env` 里设置 `MODEL_GGUF=/path/to/model.gguf`。
+仅在 GGUF/llama.cpp 路线需要：下载 `tencent/HY-MT1.5-1.8B-GGUF` 的某个量化文件到本地，然后在 `.env` 里设置 `MODEL_GGUF=/path/to/model.gguf`。
 
 ## OpenAI 风格流式输出（SSE）
 
@@ -74,9 +77,9 @@ bash scripts/launchd-uninstall.sh
 
 ## 环境变量
 
+通用：
 - `HOST`：监听地址，默认 `127.0.0.1`
 - `PORT`：端口，默认 `3000`
-- `MODEL_GGUF`：本地 GGUF 模型路径（必填）
 - `API_KEY`：可选，设置后要求 `Authorization: Bearer <key>` 或 `?token=<key>`
 - `MAX_NEW_TOKENS`：默认 `1024`
 - `TEMPERATURE`：默认 `0`（翻译推荐用确定性输出）
@@ -86,6 +89,15 @@ bash scripts/launchd-uninstall.sh
 - `MAX_INPUT_CHARS`：单段文本超过该长度会自动分块翻译再拼接（用于避免长文在上下文/输出上限下“看似成功但被截断”）
 - `MODEL_MAX_CONCURRENCY`：每个进程允许同时进行的生成次数（默认 `1`；过大可能导致卡顿/内存飙升）
 - `IMME_MAX_TEXTS`：`/imme` 允许的 `text_list` 最大段数（超过返回 413）
+
+MLX：
+- `BACKEND=mlx`
+- `MODEL_ID`：默认 `m-i/HY-MT1.5-1.8B-mlx-8Bit`
+- `PRELOAD_MODEL`：默认 `0`（启动时不强制预加载；首次请求再加载）
+- `UVICORN_WORKERS`：默认 `1`
+
+GGUF/llama.cpp（Rust Web）：
+- `MODEL_GGUF`：本地 GGUF 模型路径（必填）
 - `LLAMA_FEATURES`：编译 features（macOS 建议 `metal`；Linux NVIDIA 建议 `cuda`）
 - `LLAMA_N_GPU_LAYERS`：加载到 GPU 的层数（默认 `0`）
 - `LLAMA_N_CTX`：上下文长度（默认 `0` 表示使用模型默认）
