@@ -86,6 +86,23 @@ def _lang_matches(entry_lang: str, requested: str | None) -> bool:
     return stored == _norm_lang(requested)
 
 
+def _term_pattern(term: str) -> re.Pattern[str]:
+    """Match a glossary term as a word, never inside an identifier.
+
+    Plain substring search turned ``playable-agent`` into "可玩的代理": the
+    product name contains the term ``agent``. Requiring non-identifier
+    characters around the match keeps product names, env vars and paths intact.
+    """
+    escaped = re.escape(term)
+    flags = re.IGNORECASE if term.isascii() else 0
+    # Allow the regular English plural so `workers`/`agents` still match.
+    suffix = r"(?:s|es)?" if term.isascii() else ""
+    # Block identifier context on both sides: letters/digits/underscore/hyphen
+    # before, and the same plus a file extension (`.` + alphanumeric) after.
+    # A sentence-final "." is not identifier context, so it still matches.
+    return re.compile(rf"(?<![A-Za-z0-9_/-]){escaped}{suffix}(?![A-Za-z0-9_-]|\.[A-Za-z0-9])", flags)
+
+
 @dataclass(frozen=True)
 class TranslationMemoryEntry:
     source: str
@@ -241,18 +258,16 @@ class Glossary:
     ) -> list[TermPair]:
         if not self._entries or not text or limit <= 0:
             return []
-        haystack = text.casefold()
         hits: list[tuple[int, TermPair]] = []
         for entry in self._entries:
             if not _lang_matches(entry.source_lang, source_lang):
                 continue
             if not _lang_matches(entry.target_lang, target_lang):
                 continue
-            needle = entry.source_term.casefold()
-            pos = haystack.find(needle)
-            if pos < 0:
+            match = _term_pattern(entry.source_term).search(text)
+            if match is None:
                 continue
-            hits.append((pos, (entry.source_term, entry.target_term)))
+            hits.append((match.start(), (entry.source_term, entry.target_term)))
         hits.sort(key=lambda item: (item[0], -len(item[1][0])))
         out: list[TermPair] = []
         for _, pair in hits:

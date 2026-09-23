@@ -1,0 +1,23 @@
+# Starter terminology for a developer-documentation page (en -> zh).
+# Lines starting with # are ignored. `source_lang`/`target_lang` may be omitted
+# to apply to every pair. Keep entries specific: a term is only injected when it
+# matches as a word, never inside an identifier (`playable-agent`, `worker.py`).
+# Measured on Hy-MT2-1.8B-4bit over 46 real doc sentences: unpinned, `agent`
+# came back as {agent, 代理, 智能体} and `worker` as {工作根模块, 浏览器进程, 工作程序}
+# across sentences; with these entries the rendering is stable per term.
+{"source_term": "model", "target_term": "模型", "source_lang": "en", "target_lang": "zh"}
+{"source_term": "worker", "target_term": "工作进程", "source_lang": "en", "target_lang": "zh"}
+{"source_term": "request", "target_term": "请求", "source_lang": "en", "target_lang": "zh"}
+{"source_term": "agent", "target_term": "代理", "source_lang": "en", "target_lang": "zh"}
+{"source_term": "rule", "target_term": "规则", "source_lang": "en", "target_lang": "zh"}
+{"source_term": "schema", "target_term": "数据结构", "source_lang": "en", "target_lang": "zh"}
+{"source_term": "audit", "target_term": "审计", "source_lang": "en", "target_lang": "zh"}
+{"source_term": "review", "target_term": "审核", "source_lang": "en", "target_lang": "zh"}
+{"source_term": "client", "target_term": "客户端", "source_lang": "en", "target_lang": "zh"}
+{"source_term": "metric", "target_term": "指标", "source_lang": "en", "target_lang": "zh"}
+{"source_term": "token", "target_term": "令牌", "source_lang": "en", "target_lang": "zh"}
+{"source_term": "session", "target_term": "会话", "source_lang": "en", "target_lang": "zh"}
+{"source_term": "prompt", "target_term": "提示词", "source_lang": "en", "target_lang": "zh"}
+{"source_term": "deploy", "target_term": "部署", "source_lang": "en", "target_lang": "zh"}
+{"source_term": "template", "target_term": "模板", "source_lang": "en", "target_lang": "zh"}
+{"source_term": "server", "target_term": "服务器", "source_lang": "en", "target_lang": "zh"}

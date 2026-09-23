@@ -32,8 +32,14 @@ def test_lost_placeholder_is_flagged():
 
 
 def test_ratio_gate_flags_runaway_output():
-    report = check_translation("Hi", "这是一个非常长的译文" * 12, "zh")
+    report = check_translation("Hi there!", "这是一个非常长的译文" * 12, "zh")
     assert "ratio_high" in report.issues
+
+
+def test_ratio_gate_ignores_short_sources():
+    # 5 chars -> 33 chars is a normal CJK title expansion, not a runaway.
+    report = check_translation("定式讲解史", "Standard Explanation of History", "en")
+    assert report.ok, report.issues
 
 
 def test_degenerate_repetition_is_flagged():

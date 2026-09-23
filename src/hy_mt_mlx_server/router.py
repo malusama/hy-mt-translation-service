@@ -33,7 +33,7 @@ from .lang import target_language_name
 from .model import GenerationParams, TranslationModel
 from .prompts import build_translation_prompt, normalize_style
 from .quality import check_translation
-from .content import has_translatable_prose
+from .content import has_translatable_prose, looks_like_code, looks_like_command
 from .script import (
     distinct_language,
     guess_language_by_script,
@@ -263,7 +263,9 @@ class Router:
             plan.decision, plan.reason, plan.result_text = "cache", "exact cache hit", cached
             return plan
 
-        if self.glossary is not None:
+        # Never inject terminology into code/commands: it turns `npx wrangler
+        # deploy` into "npx wrangler 部署".
+        if self.glossary is not None and not (looks_like_code(text) or looks_like_command(text)):
             plan.glossary = self.glossary.terms_for(
                 text,
                 source_lang=resolved_source,
@@ -396,6 +398,18 @@ class Router:
             plan.result_text = results.get(plan.index, "")
 
     # ------------------------------------------------------------------ fast path
+    def _fast_eligible(self, plan: _Plan, source_lang: Optional[str], target_lang: str) -> bool:
+        """Would the fast backend be asked to serve this segment?"""
+        if not self.config.fast_enabled or self.fast_backend is None:
+            return False
+        if plan.glossary or plan.reference:
+            # Terminology is a hard requirement and only the main engine gets the
+            # reference block; a 31M student would silently ignore it.
+            return False
+        if len(plan.chunks) != 1 or len(plan.text) > self.config.fast_max_chars:
+            return False
+        return bool(self.fast_backend.supports_pair(plan.source_lang or source_lang, target_lang))
+
     async def _run_fast(self, plans: list[_Plan], source_lang: Optional[str], target_lang: str) -> list[_Plan]:
         """Fill plans from the fast backend; return the ones that must escalate."""
         fast = self.fast_backend
@@ -404,13 +418,7 @@ class Router:
         eligible: list[_Plan] = []
         escalate: list[_Plan] = []
         for plan in plans:
-            if len(plan.chunks) != 1 or len(plan.text) > self.config.fast_max_chars:
-                escalate.append(plan)
-                continue
-            if not fast.supports_pair(plan.source_lang or source_lang, target_lang):
-                escalate.append(plan)
-                continue
-            eligible.append(plan)
+            (eligible if self._fast_eligible(plan, source_lang, target_lang) else escalate).append(plan)
 
         # The fast engine is asked one language pair at a time: a kana segment
         # resolves to ja while a latin one resolves to en, and mixing them in a
@@ -550,15 +558,26 @@ class Router:
         source_lang: Optional[str],
         target_lang: str,
     ) -> list[dict[str, Any]]:
-        """Decide without running any forward pass (Laya's ``Router.route``)."""
+        """Decide without running any forward pass (Laya's ``Router.route``).
+
+        For a segment that would go to the main engine, the reported engine is
+        the *predicted* one: ``fast`` when the cascade would try the fast
+        backend first. The real engine can still end up as ``main`` if the fast
+        output fails the quality gate and escalates.
+        """
         out: list[dict[str, Any]] = []
         for i, text in enumerate(texts):
             plan = self._plan(i, str(text), source_lang, target_lang)
+            engine = plan.decision
+            reason = plan.reason
+            if engine == "main" and self._fast_eligible(plan, source_lang, target_lang):
+                engine = "fast"
+                reason = (reason + "; " if reason else "") + "fast path eligible"
             out.append(
                 {
                     "index": i,
-                    "engine": plan.decision,
-                    "reason": plan.reason,
+                    "engine": engine,
+                    "reason": reason,
                     "chunks": len(plan.chunks) or 1,
                     "source_lang": plan.source_lang,
                     "target_lang": _norm_lang(target_lang),

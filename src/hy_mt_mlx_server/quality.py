@@ -49,11 +49,16 @@ def _normalize(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip().casefold()
 
 
-def _ratio_band(target_lang: str | None) -> tuple[float, float]:
+def _ratio_band(target_lang: str | None, source: str) -> tuple[float, float]:
     # CJK targets are far denser than their latin sources; latin targets the
     # other way round. Bands are intentionally loose -- this is a sanity gate,
     # not a length heuristic for MT.
     lang = (target_lang or "").lower()
+    latin_target = lang not in {"zh", "zh-hant", "ja", "ko", "yue"}
+    if latin_target and any(not ch.isascii() for ch in source if ch.isalpha()):
+        # CJK source -> latin target expands a lot (定式讲解史 -> "Standard
+        # Explanation of History"); the band has to allow that.
+        return 0.1, 10.0
     if lang in {"zh", "zh-hant", "ja", "ko", "yue"}:
         return 0.08, 2.5
     return 0.2, 6.0
@@ -84,8 +89,10 @@ def check_translation(
         ):
             issues.append("echo")
 
-    if src and has_letters(out):
-        lo, hi = _ratio_band(target_lang)
+    # Ratios over very short sources are meaningless (5 chars -> 30 chars is a
+    # normal expansion, not a runaway).
+    if len(src) >= 8 and has_letters(out):
+        lo, hi = _ratio_band(target_lang, src)
         ratio = len(out) / max(1, len(src))
         if ratio < lo:
             issues.append("ratio_low")

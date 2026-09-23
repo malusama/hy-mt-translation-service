@@ -151,6 +151,9 @@ Shortlist / 术语表：
 - `SHORTLIST_RERANK`：`off`（默认）或 `model`（对候选做一次前向打分，取对数概率最高者）
 - `GLOSSARY_LIMIT`：单段注入术语条数上限，默认 `8`
 
+术语表与快通道的关系：**命中术语的段落不会走快通道**。术语是硬要求，只有主模型会收到
+reference block；31M 学生模型会直接忽略它。代价是这些段从 ~20ms 变成 ~150ms。
+
 ## 路由（Router）
 
 每个 segment 按顺序判定，命中即停（前 5 步都不需要前向）：
@@ -198,6 +201,66 @@ curl -s http://127.0.0.1:3000/shortlist -H 'content-type: application/json' \
 curl -s http://127.0.0.1:3000/glossary -H 'content-type: application/json' \
   -d '{"terms":[{"source_term":"service mesh","target_term":"服务网格","source_lang":"en","target_lang":"zh"}]}'
 ```
+
+仓库里带了一份起步用的 `data/glossary.example.jsonl`（16 个开发文档常用词）。
+
+## 用真实语料实测（`tools/imme_stats.py`）
+
+不要靠感觉调 `ROUTER_*` / `SHORTLIST_*`——喂它一段真实语料，直接看判定分布与延迟：
+
+```bash
+# 只看判定（零前向，最快）
+python -m tools.imme_stats --corpus segments.jsonl --dry-run --fast-url http://127.0.0.1:3000
+
+# 真跑：主模型 + 本机 marian-edge 作快通道，两遍（第二遍看缓存命中）
+python -m tools.imme_stats --corpus segments.jsonl --model-dir /tmp/hymt2b4 \
+    --fast-url http://127.0.0.1:3000 --glossary data/glossary.example.jsonl \
+    --per-category-limit 40 --passes 2 --dump predictions.jsonl
+```
+
+输入是 JSONL：`{"text": "...", "src": "en", "tgt": "zh", "category": "docs_prose"}`。
+
+在一份**真实语料**（从本机各仓库里抽出的 488 段：英文文档正文 220、短标签 70、
+katago-cloud 的真实日文文案 90、真实中文文案 60、真实代码/标识符 23、重复 UI 25）上，
+Hy-MT2-1.8B-4bit + marian-edge(31M) 快通道，取每类前 40 段的实测结果：
+
+| 类别 | n | passthrough | cache | fast | main | 不进主模型 | ms/段 |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 英文文档正文 (en→zh) | 40 | 0 | 0 | 40 | 0 | 100% | 18 |
+| 英文短标签 (en→zh) | 40 | 17 | 0 | 23 | 0 | 100% | 9 |
+| 日文真实文案 (ja→zh) | 40 | 0 | 0 | 0 | 40 | 0% | 144 |
+| 中文真实文案 (zh→en) | 40 | 0 | 0 | 0 | 40 | 0% | 181 |
+| 代码/标识符 | 23 | 21 | 0 | 2 | 0 | 100% | 3 |
+| 重复 UI | 25 | 11 | 14 | 0 | 0 | 100% | 0 |
+| **合计（冷启动）** | **208** | 49 | 14 | 65 | 80 | **62%** | 18 |
+| **同一批第二次请求** | 208 | 49 | 159 | 0 | 0 | **100%** | 0 |
+
+要点：
+
+- 英文文档正文全部落在 31M 快通道，**18ms/段 vs 主模型 ~150ms**，约 8×；
+- 真实日文/中文文案（快通道只配了 en→zh）走主模型；
+- 冷启动 0 质量问题、0 次重试、0 次升级；第二遍 100% 缓存命中；
+- 加上 `data/glossary.example.jsonl` 后，63/338 英文段命中术语（约 19%），这些段被
+  **强制拉回主模型**以遵守术语，整体“不进主模型”从 62% 降到 57%，换来术语一致。
+
+术语一致性（46 句真实文档，同一术语在不同句子里出现的译法个数）：
+
+| 术语 | 无术语表 | 加术语表 | 结果 |
+|---|---|---|---|
+| `agent` | {代理, 智能体} | {代理} | 收敛 |
+| `review` | {审查, 审核, 查看} | {审核} | 收敛 |
+| `client` | {客户, 客户端} | {客户端} | 收敛 |
+| `schema` | {架构, 模式} | {数据结构, 架构} | 部分收敛 |
+| `deploy` | {其他} | {部署, 其他} | 部分收敛 |
+| 其余 11 个（model/rule/audit/metric/token/session/prompt/template/server/request/worker 等） | 本来就 1 种 | 不变 | 已一致 |
+
+两个实测出来的注意点：
+
+- 术语按**词**匹配，不会动标识符：`playable-agent`、`PLAYABLE_AGENT_METRICS_PORT`、
+  `worker.py` 都不注入（早期用子串匹配时 `playable-agent` 被译成“可玩的代理”，已修）。
+- 术语表只保证**一致**，不保证**更好**：把 `review` 定成“审核”后，
+  “review visualizations”也会变成“审核可视化”，在该语境下未必优于“查看可视化”。
+  词义分支多的词建议按语境分别建条目，或干脆不建。
 
 ## 并发/性能建议
 

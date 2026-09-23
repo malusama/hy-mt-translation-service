@@ -46,12 +46,24 @@ _CODE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\{%.{1,60}?%\}"),
     re.compile(r"%[sdfxX]"),
     re.compile(r"(?:^|\s)-{1,2}[A-Za-z][\w-]*"),  # command flags: -g, --model
-    re.compile(r"\w+\([^)]{0,40}\)"),  # call syntax: fn(arg)
+    re.compile(r"\w+\("),  # call syntax: fn( / obj.method(
+    re.compile(r"[A-Za-z_]\w*\.\w+"),  # attribute access, file names, versions
+    re.compile(r"^[A-Z][A-Z0-9_]{2,}="),  # env assignment: MODEL_ID=...
+    re.compile(r"[\"']\w[\w-]*[\"']\s*:"),  # JSON/JS key
+    re.compile(r"\d{4}-\d{2}-\d{2}T?\d?"),  # ISO timestamp/date
+    # CLI invocations: `npx wrangler deploy` is a command, not a sentence.
+    # (see looks_like_command: a sentence that merely *starts* with a tool name
+    # is not a command)
     re.compile(r"\b\w+\.(?:py|js|ts|rs|go|json|ya?ml|toml|md|sh|gguf|bin)\b"),
 )
 
+_CLI_PATTERN = re.compile(
+    r"\s*(?:npx|npm|pnpm|yarn|bun|cargo|go|git|docker|kubectl|helm|make|cmake|python3?|pip3?|uv|"
+    r"curl|wget|brew|gh|wrangler|task|just|lsof|kill|ssh|scp|rsync|jq|sed|awk|grep|find|xargs)\b"
+)
+
 _WORD = re.compile(r"[A-Za-z][A-Za-z'-]*")
-_SENTENCE_PUNCT = re.compile(r"[.!?。！？]")
+_SENTENCE_PUNCT = re.compile(r"[.!?。！？](?:\s|$)")
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_.\-]*")
 # Spans removed before asking "is there prose left?".
 _STRIP_PATTERNS: tuple[re.Pattern[str], ...] = _TOKEN_PATTERNS + (
@@ -69,6 +81,11 @@ def extract_tokens(text: str) -> list[str]:
 
 def looks_like_code(text: str) -> bool:
     return any(pattern.search(text) for pattern in _CODE_PATTERNS)
+
+
+def looks_like_command(text: str) -> bool:
+    """A shell/CLI invocation: starts with a known tool and is not a sentence."""
+    return bool(_CLI_PATTERN.match(text)) and not _SENTENCE_PUNCT.search(text)
 
 
 def strip_protected(text: str) -> str:
@@ -111,10 +128,11 @@ def has_translatable_prose(text: str) -> bool:
         return False
     # A command line carries no sentence punctuation and no prose: shell
     # commands, tags and flags are meant to stay as they are.
-    if looks_like_code(text) and not _SENTENCE_PUNCT.search(residue):
+    if (looks_like_code(text) or looks_like_command(text)) and not _SENTENCE_PUNCT.search(residue):
         return False
     # A word carrying lowercase (Hello, GitHub) or a multi-word phrase (SAVE 20%
-    # TODAY) is prose; a lone ALL-CAPS token (TODO, OK, README) is a name.
+    # TODAY) is prose; a lone ALL-CAPS token (TODO, OK, README) is a name, and
+    # single-letter fragments (the "T"/"Z" of a timestamp) are not words.
     if any(word != word.upper() for word in words):
         return True
-    return len(words) >= 2
+    return len(words) >= 2 and all(len(word) >= 2 for word in words)

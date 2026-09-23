@@ -17,6 +17,20 @@ def test_identifiers_and_code_are_not_prose(text):
 
 @pytest.mark.parametrize(
     "text",
+    [
+        '"target_lang": "zh",',          # JSON fragment
+        "python main.py",                # command with a file name
+        "MARIAN_EDGE_JA_EN_MODEL_DIR=models/jaen",  # env assignment
+        "kwargs.get('timeout_s', 30)",   # attribute access + call
+        "2026-09-23T07:44:05Z",          # timestamp
+    ],
+)
+def test_code_shapes_seen_in_real_corpora_are_not_prose(text):
+    assert not has_translatable_prose(text)
+
+
+@pytest.mark.parametrize(
+    "text",
     ["Hello", "Read more", "SAVE 20% TODAY", "The service is ready.", "服务", "設定",
      "HTTP 500 Internal Server Error", "GitHub Actions failed on the arm64 job."],
 )
@@ -54,3 +68,15 @@ def test_caps_prose_is_not_treated_as_a_protected_token():
     tokens = extract_tokens("SAVE 20% TODAY")
     assert "SAVE" not in tokens and "TODAY" not in tokens
     assert "HTTP_500" in extract_tokens("HTTP_500 error") or "HTTP_500" in extract_tokens("HTTP_500")
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["npx wrangler deploy", "git rev-parse --short HEAD", "cargo build --release", "uv run pytest -q"],
+)
+def test_cli_invocations_are_not_prose(text):
+    assert not has_translatable_prose(text)
+
+
+def test_sentence_about_a_command_is_still_prose():
+    assert has_translatable_prose("Run npx wrangler deploy to publish the site.")

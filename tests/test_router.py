@@ -248,3 +248,42 @@ def test_passthrough_can_be_disabled():
     router = Router(model, config=RouterConfig(skip_untranslatable=False))
     (result,) = run(router.translate_many(["SHA256"], **EN_ZH))
     assert result.engine == "main"
+
+
+def test_route_only_predicts_the_fast_path():
+    model = FakeModel()
+    router = Router(model, config=RouterConfig(fast_enabled=True), fast_backend=FakeFastBackend())
+    routes = router.route_only(
+        # the second is prose that exceeds ROUTER_FAST_MAX_CHARS
+        ["The service is ready.", "The service is ready. " * 14],
+        source_lang="en",
+        target_lang="zh",
+    )
+    assert routes[0]["engine"] == "fast" and "fast path eligible" in routes[0]["reason"]
+    assert routes[1]["engine"] == "main"
+    # A pair the fast backend does not serve stays on the main engine.
+    routes = router.route_only(["The service is ready."], source_lang="ja", target_lang="zh")
+    assert routes[0]["engine"] == "main"
+
+
+def test_glossary_is_not_injected_into_commands():
+    model = FakeModel()
+    glossary = Glossary([GlossaryEntry("deploy", "部署", "en", "zh")])
+    router = Router(model, glossary=glossary)
+    (result,) = run(router.translate_many(["npx wrangler deploy"], **EN_ZH))
+    assert result.engine == "passthrough"
+    assert model.prompts == [] and model.calls == []
+
+
+def test_segments_with_glossary_terms_skip_the_fast_path():
+    model = FakeModel()
+    glossary = Glossary([GlossaryEntry("worker", "工作进程", "en", "zh")])
+    router = Router(model, config=RouterConfig(fast_enabled=True), glossary=glossary, fast_backend=FakeFastBackend())
+    routes = router.route_only(
+        ["The worker pool is busy.", "The cache is cold."],
+        source_lang="en",
+        target_lang="zh",
+    )
+    # Terminology must be honoured by the engine that receives the reference block.
+    assert routes[0]["engine"] == "main" and "worker" in routes[0]["glossary_terms"]
+    assert routes[1]["engine"] == "fast"

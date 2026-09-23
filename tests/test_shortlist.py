@@ -80,3 +80,16 @@ def test_rank_candidates_uses_the_scorer():
 
     ranked = rank_candidates(scorer, "prompt", ["aa", "aaaa", "aaa"])
     assert [c for c, _ in ranked] == ["aaaa", "aaa", "aa"]
+
+
+def test_glossary_does_not_match_inside_identifiers():
+    glossary = Glossary([GlossaryEntry("agent", "代理", "en", "zh")])
+    assert glossary.terms_for("The agent handles retries.", source_lang="en", target_lang="zh") == [("agent", "代理")]
+    # Product names, paths and env vars must not be rewritten.
+    for text in ("playable-agent uploads the zip", "PLAYABLE_AGENT_METRICS_PORT is set", "src/agent/run.ts"):
+        assert glossary.terms_for(text, source_lang="en", target_lang="zh") == []
+
+
+def test_glossary_is_case_insensitive_for_latin_terms():
+    glossary = Glossary([GlossaryEntry("worker", "工作进程", "en", "zh")])
+    assert glossary.terms_for("The Worker pool is busy.", source_lang="en", target_lang="zh") == [("worker", "工作进程")]
