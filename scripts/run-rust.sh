@@ -24,7 +24,7 @@ fi
 MODEL_PATH="${MODEL_GGUF:-${MODEL_PATH:-${MODEL_ID:-}}}"
 if [[ -z "${MODEL_PATH}" ]]; then
   echo "Missing model path. Set MODEL_GGUF to a local .gguf file path (recommended)." >&2
-  echo "Example: export MODEL_GGUF=\"$ROOT/model/HY-MT1.5-1.8B-Q4_K_M.gguf\"" >&2
+  echo "Example: export MODEL_GGUF=\"$ROOT/model/Hy-MT2-1.8B-Q4_K_M.gguf\"" >&2
   exit 1
 fi
 if [[ ! -f "${MODEL_PATH}" ]]; then

@@ -29,7 +29,7 @@ if ! command -v uv >/dev/null 2>&1; then
 fi
 
 export BACKEND="${BACKEND:-mlx}"
-export MODEL_ID="${MODEL_ID:-m-i/HY-MT1.5-1.8B-mlx-8Bit}"
+export MODEL_ID="${MODEL_ID:-mlx-community/Hy-MT2-1.8B-4bit}"
 export HOST="${HOST:-127.0.0.1}"
 export PORT="${PORT:-3000}"
 export UVICORN_WORKERS="${UVICORN_WORKERS:-1}"

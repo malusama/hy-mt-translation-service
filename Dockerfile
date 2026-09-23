@@ -21,7 +21,7 @@ ENV HOST=0.0.0.0 \
     BACKEND=transformers \
     DEVICE=cpu \
     DTYPE=float32 \
-    MODEL_ID=tencent/HY-MT1.5-1.8B \
+    MODEL_ID=tencent/Hy-MT2-1.8B \
     PRELOAD_MODEL=1
 
 EXPOSE 3000

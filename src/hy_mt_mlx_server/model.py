@@ -4,9 +4,10 @@ import asyncio
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 import json
-from typing import Any, Optional, Protocol
+from typing import Any, Optional, Protocol, Sequence
 
 from .lang import target_language_name
+from .prompts import build_translation_prompt, normalize_style
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,8 @@ class TranslationModel(Protocol):
 
     async def translate_many(self, texts: list[str], to_lang: str, params: GenerationParams) -> list[str]: ...
 
+    async def translate_prompts(self, prompts: Sequence[str], params: GenerationParams) -> list[str]: ...
+
     def close(self) -> None: ...
 
 
@@ -40,11 +43,18 @@ def _extract_json_array(text: str) -> list[Any]:
 
 
 class HyMtMlxModel:
-    def __init__(self, model_id: str, *, max_concurrency: int = 1) -> None:
+    def __init__(
+        self,
+        model_id: str,
+        *,
+        max_concurrency: int = 1,
+        prompt_style: str = "legacy",
+    ) -> None:
         if max_concurrency < 1:
             raise ValueError("max_concurrency must be >= 1")
 
         self._model_id = model_id
+        self._style = normalize_style(prompt_style)
         self._model: Optional[Any] = None
         self._tokenizer: Optional[Any] = None
         self._load_lock = asyncio.Lock()
@@ -72,10 +82,24 @@ class HyMtMlxModel:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(self._executor, self.load_sync)
 
-    def _build_prompt(self, text: str, to_lang: str) -> str:
-        lang_name = target_language_name(to_lang)
-        prompt = f"Translate the following segment into {lang_name}, without additional explanation.\\n\\n{text}"
+    def _build_prompt(self, text: str, to_lang: str, glossary: Sequence[tuple[str, str]] = ()) -> str:
+        prompt = build_translation_prompt(
+            text,
+            target_language_name(to_lang),
+            style=self._style,
+            glossary=glossary,
+        )
+        return self._apply_chat(prompt)
 
+    def _apply_chat(self, prompt: str) -> str:
+        """Wrap a raw prompt in the model's chat template.
+
+        Hy-MT2 is only reliable when the template is applied: feeding it a raw
+        prompt makes it continue the text instead of translating (measured --
+        the raw variant hallucinates an unrelated sentence, the templated one
+        does not). Both the plain and the glossary/reference paths must go
+        through here.
+        """
         tok = self._tokenizer
         if tok is None:
             return prompt
@@ -113,12 +137,57 @@ class HyMtMlxModel:
         )
         return str(text).strip()
 
+    def _generate_prompts_sync(self, prompts: Sequence[str], params: GenerationParams) -> list[str]:
+        return [self._generate_sync(prompt, params) for prompt in prompts]
+
+    def _score_sync(self, prompt: str, candidates: Sequence[str]) -> list[float]:
+        """Mean token log-probability of each candidate continuation.
+
+        One forward pass per candidate, no decoding -- the same "score, don't
+        generate" primitive Laya exposes through ``predict_shortlist``. Used by
+        the shortlist reranker (``SHORTLIST_RERANK=model``).
+        """
+        import mlx.core as mx  # type: ignore
+
+        if self._model is None or self._tokenizer is None:
+            raise RuntimeError("model not loaded")
+
+        prompt_ids = list(self._tokenizer.encode(prompt))
+        scores: list[float] = []
+        for candidate in candidates:
+            candidate_ids = list(self._tokenizer.encode(candidate))
+            if not candidate_ids or not prompt_ids:
+                scores.append(float("-inf"))
+                continue
+            logits = self._model(mx.array([prompt_ids + candidate_ids]))
+            start = len(prompt_ids) - 1
+            window = logits[0][start : start + len(candidate_ids)]
+            log_probs = window - mx.logsumexp(window, axis=-1, keepdims=True)
+            token_log_probs = log_probs[mx.arange(len(candidate_ids)), mx.array(candidate_ids)]
+            scores.append(float(mx.mean(token_log_probs)))
+        return scores
+
     async def translate(self, text: str, to_lang: str, params: GenerationParams) -> str:
         await self.ensure_loaded()
         prompt = self._build_prompt(text=text, to_lang=to_lang)
         async with self._semaphore:
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(self._executor, self._generate_sync, prompt, params)
+
+    async def translate_prompts(self, prompts: Sequence[str], params: GenerationParams) -> list[str]:
+        if not prompts:
+            return []
+        await self.ensure_loaded()
+        templated = [self._apply_chat(prompt) for prompt in prompts]
+        async with self._semaphore:
+            loop = asyncio.get_running_loop()
+            return list(await loop.run_in_executor(self._executor, self._generate_prompts_sync, templated, params))
+
+    async def score_continuations(self, prompt: str, candidates: Sequence[str]) -> list[float]:
+        await self.ensure_loaded()
+        async with self._semaphore:
+            loop = asyncio.get_running_loop()
+            return list(await loop.run_in_executor(self._executor, self._score_sync, prompt, list(candidates)))
 
     async def translate_many(self, texts: list[str], to_lang: str, params: GenerationParams) -> list[str]:
         if not texts:
@@ -169,11 +238,20 @@ class HyMtMlxModel:
 
 
 class HyMtTransformersModel:
-    def __init__(self, model_id: str, device: str = "auto", dtype: str = "auto", *, max_concurrency: int = 1) -> None:
+    def __init__(
+        self,
+        model_id: str,
+        device: str = "auto",
+        dtype: str = "auto",
+        *,
+        max_concurrency: int = 1,
+        prompt_style: str = "legacy",
+    ) -> None:
         if max_concurrency < 1:
             raise ValueError("max_concurrency must be >= 1")
 
         self._model_id = model_id
+        self._style = normalize_style(prompt_style)
         self._device = device
         self._dtype = dtype
         self._model: Optional[Any] = None
@@ -266,10 +344,17 @@ class HyMtTransformersModel:
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(self._executor, self.load_sync)
 
-    def _build_prompt(self, text: str, to_lang: str) -> str:
-        lang_name = target_language_name(to_lang)
-        prompt = f"Translate the following segment into {lang_name}, without additional explanation.\\n\\n{text}"
+    def _build_prompt(self, text: str, to_lang: str, glossary: Sequence[tuple[str, str]] = ()) -> str:
+        prompt = build_translation_prompt(
+            text,
+            target_language_name(to_lang),
+            style=self._style,
+            glossary=glossary,
+        )
+        return self._apply_chat(prompt)
 
+    def _apply_chat(self, prompt: str) -> str:
+        """See HyMtMlxModel._apply_chat: the chat template is not optional."""
         tok = self._tokenizer
         if tok is None:
             return prompt
@@ -381,6 +466,15 @@ class HyMtTransformersModel:
         async with self._semaphore:
             loop = asyncio.get_running_loop()
             return await loop.run_in_executor(self._executor, self._generate_many_sync, prompts, params)
+
+    async def translate_prompts(self, prompts: Sequence[str], params: GenerationParams) -> list[str]:
+        if not prompts:
+            return []
+        await self.ensure_loaded()
+        templated = [self._apply_chat(prompt) for prompt in prompts]
+        async with self._semaphore:
+            loop = asyncio.get_running_loop()
+            return list(await loop.run_in_executor(self._executor, self._generate_many_sync, templated, params))
 
     def close(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)

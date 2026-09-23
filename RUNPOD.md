@@ -2,7 +2,7 @@
 
 本项目的 `mlx/mlx-lm` 后端只能在 macOS + Apple Silicon 上跑；RunPod 属于 Linux + NVIDIA GPU。
 
-`tencent/HY-MT1.5-1.8B` 的架构在 **vLLM 里可能不受支持**，但可以用 **GGUF + llama.cpp** 在 Linux + NVIDIA GPU 上直接跑（并且支持 OpenAI 风格 SSE 流式输出）。
+`tencent/Hy-MT2-1.8B` 的架构在 **vLLM 里可能不受支持**，但可以用 **GGUF + llama.cpp** 在 Linux + NVIDIA GPU 上直接跑（并且支持 OpenAI 风格 SSE 流式输出）。
 
 ## 你应该用 Pods（长驻服务）
 
@@ -36,7 +36,7 @@ docker buildx build --platform linux/amd64 \
 
 推荐环境变量（Pod 的 Environment Variables）：
 
-- `MODEL_ID=tencent/HY-MT1.5-1.8B`
+- `MODEL_ID=tencent/Hy-MT2-1.8B`
 - `BACKEND=transformers`
 - `DEVICE=cuda`
 - `DTYPE=float16`
@@ -88,7 +88,7 @@ docker buildx build --platform linux/amd64 \
 
 推荐环境变量（Endpoint Environment Variables）：
 
-- `MODEL_GGUF_URL=https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF/resolve/main/HY-MT1.5-1.8B-Q4_K_M.gguf`
+- `MODEL_GGUF_URL=https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.8B-Q4_K_M.gguf`
 - `MODEL_DIR=/runpod-volume/models`
 - `LLAMA_N_GPU_LAYERS=999`（尽量全上 GPU；OOM 再调小）
 - `MAX_NEW_TOKENS=1024`、`TEMPERATURE=0`、`TOP_P=0.6`

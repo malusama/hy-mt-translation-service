@@ -1,7 +1,7 @@
 [project]
 name = "hy-mt-mlx-translation-service"
 version = "0.1.0"
-description = "MLX-based translation service using HY-MT1.5-1.8B, compatible with LinguaSpark/server APIs (incl. Immersive Translate)."
+description = "Translation service for the Tencent Hy-MT2 model family (MLX / llama.cpp / HTTP), with router + shortlist, compatible with LinguaSpark/server APIs (incl. Immersive Translate)."
 readme = "README.md"
 requires-python = ">=3.10,<3.13"
 license = { text = "MIT" }
@@ -16,15 +16,22 @@ dependencies = [
 [project.optional-dependencies]
 mlx = [
   "mlx>=0.29",
-  "mlx-lm>=0.28.3",
+  # Hy-MT2 tokenizer_config uses the transformers 5 "TokenizersBackend";
+  # mlx-lm >= 0.31 pulls transformers 5 in, older pins fail at load time.
+  "mlx-lm>=0.31.3",
+  "transformers>=5.0",
 ]
 transformers = [
   "torch>=2.2",
-  # Model card recommends transformers 4.56.x for HY-MT1.5
+  # Hy-MT2 model cards recommend transformers >= 4.56
   "transformers>=4.56,<4.58",
   "accelerate>=0.33",
   "safetensors>=0.4",
   "sentencepiece>=0.2",
+]
+dev = [
+  "pytest>=8",
+  "httpx>=0.27",
 ]
 
 [project.scripts]
@@ -42,3 +49,8 @@ where = ["src"]
 
 [tool.uv]
 package = true
+# The MLX and transformers backends need different transformers generations:
+# MLX (mlx-lm>=0.31) requires transformers 5.x for the Hy-MT2 tokenizer, while the
+# transformers/GGUF-CUDA path is validated on the 4.56.x line. Declaring the extras as
+# conflicting makes uv resolve them independently instead of forcing one version.
+conflicts = [[{ extra = "mlx" }, { extra = "transformers" }]]

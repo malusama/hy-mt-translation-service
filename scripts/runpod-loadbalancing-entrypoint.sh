@@ -4,7 +4,7 @@ set -euo pipefail
 export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH}"
 
 MODEL_PATH="${MODEL_GGUF:-}"
-MODEL_URL="${MODEL_GGUF_URL:-https://huggingface.co/tencent/HY-MT1.5-1.8B-GGUF/resolve/main/HY-MT1.5-1.8B-Q4_K_M.gguf}"
+MODEL_URL="${MODEL_GGUF_URL:-https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.8B-Q4_K_M.gguf}"
 MODEL_DIR="${MODEL_DIR:-/runpod-volume/models}"
 
 if [[ -z "${MODEL_PATH}" ]]; then
