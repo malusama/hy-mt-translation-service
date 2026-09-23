@@ -20,6 +20,13 @@
 - **Linux + NVIDIA GPU（RunPod 等）**：GGUF + llama.cpp（可选 CUDA）
 - **RunPod Serverless（Worker 网关）**：可用（但 Job API 轮询不适合逐 token SSE）
 
+试过但**暂时不要用**的：vLLM 官方的 Apple Silicon 插件
+[vllm-metal](https://github.com/vllm-project/vllm-metal)。它能服务
+`mlx-community/Hy-MT2-1.8B-4bit`（Hunyuan dense 在它的支持矩阵里）并返回正确译文，
+但实测单条 8–20 秒，比同一台机器上的 `mlx-lm` 慢 60–150 倍，原因未查清——
+过程和待查假设见 [docs/vllm-metal-20260923.md](docs/vllm-metal-20260923.md)，
+压测脚本 `tools/bench_vllm_metal.py`。
+
 ## 运行环境
 
 - **MLX**：Python + `uv`（macOS arm64）
