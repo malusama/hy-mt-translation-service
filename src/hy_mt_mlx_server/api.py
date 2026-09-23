@@ -115,6 +115,7 @@ def get_settings() -> Settings:
         MODEL_HTTP_TIMEOUT=_float_env("MODEL_HTTP_TIMEOUT", 120.0),
         ROUTER_ENABLED=_truthy(os.getenv("ROUTER_ENABLED", "1")),
         ROUTER_SKIP_SYMBOL_ONLY=_truthy(os.getenv("ROUTER_SKIP_SYMBOL_ONLY", "1")),
+        ROUTER_SKIP_UNTRANSLATABLE=_truthy(os.getenv("ROUTER_SKIP_UNTRANSLATABLE", "1")),
         ROUTER_SKIP_SAME_LANGUAGE=_truthy(os.getenv("ROUTER_SKIP_SAME_LANGUAGE", "1")),
         ROUTER_CACHE_SIZE=_int_env("ROUTER_CACHE_SIZE", 4096),
         ROUTER_RETRY=_truthy(os.getenv("ROUTER_RETRY", "1")),
@@ -138,6 +139,7 @@ def router_config_from_settings(settings: Settings) -> RouterConfig:
     return RouterConfig(
         enabled=settings.router_enabled,
         skip_symbol_only=settings.router_skip_symbol_only,
+        skip_untranslatable=settings.router_skip_untranslatable,
         skip_same_language=settings.router_skip_same_language,
         cache_size=settings.router_cache_size,
         retry_on_hard_issues=settings.router_retry,

@@ -33,6 +33,7 @@ from .lang import target_language_name
 from .model import GenerationParams, TranslationModel
 from .prompts import build_translation_prompt, normalize_style
 from .quality import check_translation
+from .content import has_translatable_prose
 from .script import (
     distinct_language,
     guess_language_by_script,
@@ -98,6 +99,7 @@ class SegmentResult:
 class RouterConfig:
     enabled: bool = True
     skip_symbol_only: bool = True
+    skip_untranslatable: bool = True
     skip_same_language: bool = True
     cache_size: int = 4096
     retry_on_hard_issues: bool = True
@@ -151,6 +153,7 @@ class Router:
         self._stats: dict[str, int] = {
             "segments": 0,
             "symbol": 0,
+            "passthrough": 0,
             "identity": 0,
             "cache": 0,
             "memory": 0,
@@ -175,6 +178,7 @@ class Router:
             "no_main_model_ratio": round(
                 (
                     self._stats["symbol"]
+                    + self._stats["passthrough"]
                     + self._stats["identity"]
                     + self._stats["cache"]
                     + self._stats["memory"]
@@ -231,6 +235,13 @@ class Router:
 
         if cfg.skip_symbol_only and is_symbol_or_number_only(text):
             plan.decision, plan.reason, plan.result_text = "symbol", "no letters to translate", text
+            return plan
+
+        # Identifiers, code, versions and bare URLs come back unchanged from any
+        # engine, so do not spend a forward pass on them (and do not let the
+        # "echo" gate fire on the correct answer).
+        if cfg.skip_untranslatable and not has_translatable_prose(text):
+            plan.decision, plan.reason, plan.result_text = "passthrough", "no translatable content", text
             return plan
 
         if cfg.skip_same_language and resolved_source and _norm_lang(resolved_source) == _norm_lang(target_lang):
@@ -498,6 +509,7 @@ class Router:
         self._bump(
             segments=len(texts),
             symbol=sum(1 for p in plans if p.decision == "symbol"),
+            passthrough=sum(1 for p in plans if p.decision == "passthrough"),
             identity=sum(1 for p in plans if p.decision == "identity"),
             cache=sum(1 for p in plans if p.decision == "cache"),
             memory=sum(1 for p in plans if p.decision == "memory"),

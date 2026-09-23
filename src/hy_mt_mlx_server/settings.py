@@ -34,6 +34,7 @@ class Settings(BaseModel):
     # Router / shortlist
     router_enabled: bool = Field(default=True, alias="ROUTER_ENABLED")
     router_skip_symbol_only: bool = Field(default=True, alias="ROUTER_SKIP_SYMBOL_ONLY")
+    router_skip_untranslatable: bool = Field(default=True, alias="ROUTER_SKIP_UNTRANSLATABLE")
     router_skip_same_language: bool = Field(default=True, alias="ROUTER_SKIP_SAME_LANGUAGE")
     router_cache_size: int = Field(default=4096, alias="ROUTER_CACHE_SIZE")
     router_retry: bool = Field(default=True, alias="ROUTER_RETRY")

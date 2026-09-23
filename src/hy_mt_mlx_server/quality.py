@@ -25,24 +25,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from .content import extract_tokens, has_translatable_prose, looks_like_code, word_count
 from .script import expected_scripts, has_letters, scripts_in
-
-# Tokens that must be preserved verbatim: printf/format placeholders, template
-# braces, html/markdown tags, urls, emails, versions, identifiers and numbers
-# with units. Kept deliberately conservative to avoid false positives.
-_TOKEN_PATTERNS: tuple[re.Pattern[str], ...] = (
-    re.compile(r"https?://\S+"),
-    re.compile(r"www\.\S+"),
-    re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+"),
-    re.compile(r"%(?:\d+\$)?[sdfxX]"),
-    re.compile(r"\{\{[^{}]{1,40}\}\}"),
-    re.compile(r"\{[A-Za-z_][A-Za-z0-9_]{0,40}\}"),
-    re.compile(r"\$\{[^{}]{1,40}\}"),
-    re.compile(r"</?[A-Za-z][A-Za-z0-9-]{0,20}>"),
-    re.compile(r"`[^`]{1,60}`"),
-    re.compile(r"\b[A-Z][A-Z0-9_]{2,}\b"),
-    re.compile(r"\bv?\d+(?:\.\d+){1,3}\b"),
-)
 
 _MIN_ECHO_CHARS = 8
 _REPEAT_NGRAM = 5
@@ -59,13 +43,6 @@ class SegmentReport:
 
     def as_dict(self) -> dict[str, object]:
         return {"ok": self.ok, "issues": self.issues}
-
-
-def extract_tokens(text: str) -> list[str]:
-    tokens: list[str] = []
-    for pattern in _TOKEN_PATTERNS:
-        tokens.extend(pattern.findall(text))
-    return tokens
 
 
 def _normalize(text: str) -> str:
@@ -97,10 +74,15 @@ def check_translation(
         return SegmentReport(ok=False, issues=["empty"])
 
     norm_src, norm_out = _normalize(src), _normalize(out)
-    if (len(out) >= _MIN_ECHO_CHARS and norm_src == norm_out) or (
-        len(out) >= 32 and norm_src and (norm_src in norm_out or norm_out in norm_src)
-    ):
-        issues.append("echo")
+    # An unchanged output is only suspicious for prose: identifiers, code,
+    # commands and bare URLs are *supposed* to come back untouched.
+    prose = has_translatable_prose(src)
+    code_like = looks_like_code(src)
+    if prose and not code_like:
+        if (len(out) >= _MIN_ECHO_CHARS and norm_src == norm_out) or (
+            len(out) >= 32 and norm_src and (norm_src in norm_out or norm_out in norm_src)
+        ):
+            issues.append("echo")
 
     if src and has_letters(out):
         lo, hi = _ratio_band(target_lang)
@@ -111,7 +93,9 @@ def check_translation(
             issues.append("ratio_high")
 
     expected = expected_scripts(target_lang)
-    if expected and has_letters(out) and not (scripts_in(out) & set(expected)):
+    # A single word (brand, product name, loanword) may legitimately stay as it
+    # is; only multi-word prose is expected to change script.
+    if prose and word_count(src) >= 2 and expected and has_letters(out) and not (scripts_in(out) & set(expected)):
         issues.append("missing_target_script")
 
     if check_placeholders:
@@ -124,7 +108,7 @@ def check_translation(
     if _has_degenerate_repetition(out):
         issues.append("repetition")
 
-    if _looks_truncated(src, out):
+    if prose and _looks_truncated(src, out):
         issues.append("possibly_truncated")
 
     return SegmentReport(ok=not issues, issues=issues)

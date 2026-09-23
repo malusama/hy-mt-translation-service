@@ -222,3 +222,29 @@ def test_declared_same_language_still_translates_a_different_script():
     # Latin text declared en->en is a genuine no-op and may be echoed.
     (echo,) = run(router.translate_many(["already english."], source_lang="en", target_lang="en", params=PARAMS))
     assert echo.engine == "identity"
+
+
+def test_identifiers_are_passed_through_without_the_model():
+    model = FakeModel()
+    router = Router(model)
+    cases = ["TODO", "SHA256", "v1.2.3", "</div>", "https://example.com/a/b?c=1", "user@example.com"]
+    results = run(router.translate_many(cases, source_lang="en", target_lang="zh", params=PARAMS))
+    assert [r.engine for r in results] == ["passthrough"] * len(cases)
+    assert [r.text for r in results] == cases
+    assert model.calls == []
+    assert router.stats["passthrough"] == len(cases)
+
+
+def test_caps_marketing_prose_is_not_passed_through():
+    model = FakeModel()
+    router = Router(model)
+    (result,) = run(router.translate_many(["SAVE 20% TODAY"], **EN_ZH))
+    assert result.engine == "main"
+    assert model.calls
+
+
+def test_passthrough_can_be_disabled():
+    model = FakeModel()
+    router = Router(model, config=RouterConfig(skip_untranslatable=False))
+    (result,) = run(router.translate_many(["SHA256"], **EN_ZH))
+    assert result.engine == "main"
